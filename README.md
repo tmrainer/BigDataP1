@@ -35,6 +35,11 @@ resuelve las mismas 10 consultas sobre el mismo dataset, cronometrando cada una.
 | `dask_2_workers.ipynb` / `dask_4_workers.ipynb` | A / B | Dask (`LocalCluster`) |
 | `modin_2_workers.ipynb` / `modin_4_workers.ipynb` | A / B | Modin sobre Ray |
 | `spark_2_workers.ipynb` / `spark_4_workers.ipynb` | A / B | Apache Spark sobre YARN |
+| `mapreduce_dataproc.ipynb` | — | Hadoop MapReduce sobre HDFS |
+
+El notebook `mapreduce_dataproc.ipynb` recoge la práctica de Hadoop MapReduce:
+`wordmean` sobre Don Quijote, `secondarysort` sobre MovieLens 100K y el
+benchmark `terasort`, los tres con HDFS como sistema de archivos distribuido.
 
 - **Arquitectura A:** 1 master `n2-highmem-4` + 2 workers `n2-standard-4`
 - **Arquitectura B:** 1 master `n2-highmem-4` + 4 workers `n2-standard-4`
