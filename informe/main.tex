@@ -1,0 +1,140 @@
+% =====================================================================
+%  Proyecto Grupal I - Big Data (UTEC)
+%  Procesamiento de Datos Masivos en la Nube
+%
+%  ESTRUCTURA DEL PROYECTO
+%    main.tex                 -> preambulo, portada e inclusion de secciones
+%    secciones/*.tex          -> una seccion del informe por archivo
+%    imagenes/                -> logo y evidencia del bucket
+%    imagenes/consultas/2w/   -> capturas Arquitectura A (1 master + 2 workers)
+%    imagenes/consultas/4w/   -> capturas Arquitectura B (1 master + 4 workers)
+%    imagenes/hadoop/         -> capturas de la practica de MapReduce
+%
+%  El CODIGO FUENTE no forma parte de este informe: se entrega por separado
+%  en el paquete codigo-fuente (scripts de Python, notebooks y scripts de
+%  Hadoop). La unica excepcion son los comandos de consola de la seccion de
+%  Hadoop, que el enunciado exige incluir en el informe.
+%
+%  Compilar con pdfLaTeX.
+% =====================================================================
+\documentclass[12pt,a4paper]{article}
+
+% ---------- Codificacion e idioma ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla,es-noshorthands]{babel}
+
+% ---------- Geometria y tipografia ----------
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\setlength{\parskip}{0.4em}
+
+% ---------- Matematicas ----------
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ---------- Graficos y tablas ----------
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+\graphicspath{{imagenes/}}
+
+% ---------- Diagramas ----------
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, fit, backgrounds}
+
+% ---------- Enlaces ----------
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+\urlstyle{same}
+
+% ---------- Bloques de codigo ----------
+\usepackage{listings}
+
+\definecolor{codebg}{gray}{0.96}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecm}{RGB}{0,120,0}
+\definecolor{codestr}{RGB}{200,90,0}
+\definecolor{coderule}{gray}{0.75}
+
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{coderule},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecm}\itshape,
+    stringstyle=\color{codestr},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=7pt,
+    xleftmargin=2.2em,
+    framexleftmargin=2em,
+    captionpos=b,
+    tabsize=4,
+    inputencoding=utf8,
+    extendedchars=true,
+    literate=%
+      {á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+      {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1
+      {ñ}{{\~n}}1 {Ñ}{{\~N}}1 {ü}{{\"u}}1 {Ü}{{\"U}}1
+      {¿}{{?`}}1 {¡}{{!`}}1 {°}{{\textdegree}}1
+}
+
+\lstdefinestyle{py}{language=Python}
+\lstdefinestyle{sh}{language=bash, numbers=none}
+
+% ---------- Ajuste fino del corte de linea ----------
+% Ultimo recurso para que LaTeX estire los espacios antes de desbordar el
+% margen, en lugar de sacar el texto fuera de la caja.
+\setlength{\emergencystretch}{3em}
+\hyphenpenalty=1000
+\tolerance=2000
+
+% \bk introduce un punto de corte de anchura cero y SIN guion. Se inserta en
+% rutas y nombres largos escritos en \texttt para que puedan partirse al final
+% de linea sin desbordar el margen. Es robusto dentro de tablas y pies de
+% figura, a diferencia de los comandos del paquete url.
+\newcommand{\bk}{\discretionary{}{}{}}
+
+% ---------- Atajos ----------
+% Encabezado de bloque seguro delante de un lstlisting (un \paragraph se solapa)
+\newcommand{\bloque}[1]{\par\medskip\noindent\textbf{#1}\par\nopagebreak\vspace{0.3em}}
+
+% Figura de captura de consulta: #1 ruta  #2 pie
+\newcommand{\captura}[2]{%
+  \begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.93\textwidth]{#1}
+    \caption{#2}
+  \end{figure}%
+}
+
+\begin{document}
+
+\input{secciones/00-portada}
+
+\tableofcontents
+\newpage
+
+\input{secciones/01-introduccion}
+\input{secciones/02-dataset}
+\input{secciones/03-gcp}
+\input{secciones/04-procesamiento}
+\input{secciones/05-operaciones}
+\input{secciones/06-hadoop}
+\input{secciones/07-conclusiones}
+
+\end{document}

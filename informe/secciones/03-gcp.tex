@@ -1,0 +1,152 @@
+% ========================= IMPLEMENTACIÓN GCP ========================
+\section{Implementación en GCP}
+
+\subsection{Almacenamiento en Google Cloud Storage}
+Para el almacenamiento de los datos se implementó un \textit{Data Lake} utilizando un \textit{bucket} de Google Cloud Storage denominado \texttt{bigdata-2026-02}, aprovisionado en la región \texttt{us-east4} (Virginia del Norte) con clase de almacenamiento \textit{Standard}. Los datos se organizaron bajo el prefijo \texttt{proyecto01/}, que actúa como carpeta lógica del proyecto y aloja tanto el dataset de entrada como los archivos de resultados generados por los \textit{notebooks}.
+
+\begin{table}[H]
+\centering
+\caption{Configuración del \textit{bucket} de Google Cloud Storage}
+\label{tab:bucket}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lp{9.2cm}@{}}
+\toprule
+\textbf{Parámetro} & \textbf{Valor} \\
+\midrule
+Nombre del \textit{bucket}    & \texttt{bigdata-2026-02} \\
+Ubicación                     & \texttt{us-east4} (Virginia del Norte) \\
+Clase de almacenamiento       & Standard \\
+Acceso público                & No público \\
+Protección                    & Borrado no definitivo (\textit{soft delete}) \\
+Prefijo del proyecto          & \texttt{proyecto01/} \\
+Objeto de entrada             & \texttt{steam\_\bk{}reviews\_\bk{}500k.\bk{}csv} (700.1 MB, \texttt{text/csv}) \\
+Objetos de salida             & \texttt{tiempos\_\bk{}<herramienta>\_\bk{}<arquitectura>.\bk{}csv} (8 archivos) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Como medida de seguridad, el \textit{bucket} se configuró restringiendo el acceso público a internet. Esta decisión aísla el almacenamiento y previene la exposición accidental de datos, manteniendo un canal privado dentro del mismo proyecto de GCP para que los nodos del clúster de Dataproc accedan al archivo CSV de manera interna y eficiente, a través de la cuenta de servicio del clúster.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{bucket.png}
+    \caption{Evidencia de la creación del \textit{bucket} \texttt{bigdata-2026-02}, la organización bajo el prefijo \texttt{proyecto01/} y el almacenamiento del dataset de 700.1 MB.}
+    \label{fig:bucket}
+\end{figure}
+
+\subsection{Justificación del Uso de Almacenamiento en la Nube}
+
+La decisión de emplear Google Cloud Storage como capa de almacenamiento, en lugar del disco local de las máquinas o de HDFS como repositorio permanente, responde a cuatro criterios:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Desacoplamiento entre almacenamiento y cómputo.} El clúster de Dataproc es un recurso \textit{efímero}: se crea para ejecutar las pruebas y se elimina al terminar, para no incurrir en costos ociosos. Si el dataset viviera en HDFS dentro del clúster, se destruiría junto con él. Al residir en GCS, el dato sobrevive a cualquier número de clústeres y permite reprovisionar la Arquitectura A o B en minutos sobre el mismo conjunto de datos, que es precisamente lo que exigió el experimento comparativo de este proyecto.
+    \item \textbf{Durabilidad y disponibilidad gestionadas.} GCS ofrece redundancia y durabilidad administradas por el proveedor, sin que el equipo deba dimensionar réplicas ni gestionar fallos de disco, a diferencia del factor de replicación que habría que configurar y sostener en HDFS.
+    \item \textbf{Acceso uniforme desde todos los motores.} El mismo objeto \texttt{gs:/\bk{}/\bk{}bigdata-\bk{}2026-\bk{}02/\bk{}proyecto01/\bk{}steam\_\bk{}reviews\_\bk{}500k.\bk{}csv} es consumible directamente por Spark mediante el conector de Cloud Storage, y descargable al nodo Master con \texttt{gsutil} para Polars, Dask y Modin. Un único origen de la verdad alimenta las cuatro herramientas evaluadas, lo que garantiza que la comparativa de tiempos se realice sobre datos idénticos.
+    \item \textbf{Costo.} El almacenamiento de objetos tiene un costo por GB-mes sustancialmente menor que el de discos persistentes asociados a máquinas virtuales encendidas, y no requiere mantener el clúster activo para conservar los datos.
+\end{itemize}
+
+\subsection{Diseño de la Arquitectura Big Data}
+
+La arquitectura diseñada sigue un modelo de procesamiento por lotes (\textit{batch}) nativo de la nube, separando estratégicamente el almacenamiento del poder de cómputo. El flujo abarca desde la ingesta de los datos hasta la exportación de los resultados métricos de vuelta al \textit{Data Lake}.
+
+\subsubsection{Explicación de Componentes}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Fuente de datos:} dataset público \textit{100 Million+ Steam Reviews} (Kaggle), del cual se derivó la muestra de 500,000 registros descrita en la Sección~\ref{subsec:muestreo}.
+    \item \textbf{Ingesta (\textit{batch}):} el archivo CSV resultante se cargó al servicio de almacenamiento de objetos de Google en una única operación de carga por lotes, sin flujo de \textit{streaming}, coherente con la naturaleza histórica y estática del conjunto.
+    \item \textbf{Data Lake (almacenamiento):} \textit{bucket} \texttt{bigdata-2026-02} bajo el prefijo \texttt{proyecto01/}. Este componente actúa como repositorio central de la verdad, almacenando tanto el dataset de entrada como los archivos CSV con los tiempos de ejecución generados al finalizar cada \textit{notebook}.
+    \item \textbf{Procesamiento distribuido:} clúster efímero de Google Cloud Dataproc con el componente opcional \textit{Jupyter} habilitado. El clúster monta el entorno de JupyterLab sobre el nodo Master, descarga temporalmente el dataset para las herramientas en memoria (Polars, Dask, Modin) y orquesta el procesamiento distribuido sobre YARN para Apache Spark y Hadoop MapReduce.
+    \item \textbf{Salida de resultados:} cada \textit{notebook} escribe su tabla de tiempos directamente a \texttt{gs://} mediante \texttt{gcsfs}, cerrando el ciclo sobre el mismo \textit{Data Lake}.
+\end{itemize}
+
+\subsubsection{Justificación Técnica y Estrategia de Escalabilidad}
+Para la validación de las herramientas se definieron instancias de segunda generación. El nodo Master emplea \texttt{n2-highmem-4} (4 vCPU, 32 GB de RAM) y los nodos \textit{worker} emplean \texttt{n2-standard-4} (4 vCPU, 16 GB de RAM). La memoria ampliada en el Master es crítica porque Polars, Dask y Modin operan sobre él de forma local: un CSV de 700 MB con una columna de texto libre de alta cardinalidad se expande varias veces en memoria al materializarse como \textit{DataFrame}, y una instancia estándar de 16 GB habría comprometido la ejecución por desbordamiento de memoria (\textit{Out of Memory}).
+
+Para demostrar empíricamente el comportamiento del procesamiento distribuido y la escalabilidad horizontal, el proyecto evalúa dos topologías:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Arquitectura A (1 Master, 2 Workers):} entorno de referencia para ejecutar y validar la correctitud de las 10 consultas en las cuatro herramientas.
+    \item \textbf{Arquitectura B (1 Master, 4 Workers):} entorno ampliado, con el doble de capacidad de cómputo en los \textit{workers} (de 8 a 16 vCPU) y el mismo tipo de nodo Master, para aislar el número de \textit{workers} como única variable de estudio.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Especificación de las dos topologías de clúster evaluadas}
+\label{tab:clusteres}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parámetro} & \textbf{Arquitectura A} & \textbf{Arquitectura B} \\
+\midrule
+Servicio                  & Cloud Dataproc          & Cloud Dataproc \\
+Imagen                    & \texttt{2.3-debian12}   & \texttt{2.3-debian12} \\
+Versión de Spark          & 3.5.3                   & 3.5.3 \\
+Nodo Master               & 1 $\times$ \texttt{n2-highmem-4} & 1 $\times$ \texttt{n2-highmem-4} \\
+\quad vCPU / RAM (Master) & 4 vCPU / 32 GB          & 4 vCPU / 32 GB \\
+Nodos Worker              & 2 $\times$ \texttt{n2-standard-4} & 4 $\times$ \texttt{n2-standard-4} \\
+\quad vCPU / RAM (c/u)    & 4 vCPU / 16 GB          & 4 vCPU / 16 GB \\
+vCPU totales en Workers   & 8                       & 16 \\
+RAM total en Workers      & 32 GB                   & 64 GB \\
+Gestor de recursos        & YARN                    & YARN \\
+Componente opcional       & Jupyter                 & Jupyter \\
+Origen de los datos       & \multicolumn{2}{l}{\texttt{gs:/\bk{}/\bk{}bigdata-\bk{}2026-\bk{}02/\bk{}proyecto01/\bk{}}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Diagramas de Arquitectura}
+A continuación se presentan los diagramas de ambas topologías implementadas.
+
+% DIAGRAMA 1: ARQUITECTURA BASE
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=1.5cm and 2.6cm,
+        box/.style={rectangle, draw=black, thick, fill=blue!10, minimum width=3cm, minimum height=1.2cm, align=center, font=\small},
+        storage/.style={cylinder, draw=black, thick, aspect=0.25, fill=orange!20, minimum width=2.5cm, minimum height=3cm, shape border rotate=90, align=center, font=\small},
+        arrow/.style={-{Stealth[scale=1.2]}, thick}
+    ]
+    \node[storage] (gcs) {Cloud Storage\\ \texttt{bigdata-2026-02}\\ \texttt{/proyecto01}};
+    \node[box, right=3.2cm of gcs, fill=green!10] (master) {\textbf{Nodo Master}\\ Dataproc + Jupyter \\ (n2-highmem-4)};
+    \node[box, right=2cm of master] (worker1) {\textbf{Worker 1}\\ (n2-standard-4)};
+    \node[box, below=0.5cm of worker1] (worker2) {\textbf{Worker 2}\\ (n2-standard-4)};
+
+    \draw[arrow] (gcs.15) -- node[above, font=\scriptsize, pos=0.5] {Lee datos} (master.165);
+    \draw[arrow] (master.195) -- node[below, font=\scriptsize, pos=0.5] {Guarda resultados} (gcs.345);
+
+    \draw[arrow, dashed] (master.east) -- node[above, font=\footnotesize, pos=0.55] {YARN} (worker1.west);
+    \draw[arrow, dashed] (master.east) -- (worker2.west);
+    \end{tikzpicture}
+    \caption{Arquitectura A: clúster Dataproc con 2 nodos trabajadores.}
+    \label{fig:arqA}
+\end{figure}
+
+% DIAGRAMA 2: ARQUITECTURA ESCALADA
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=1.5cm and 2.6cm,
+        box/.style={rectangle, draw=black, thick, fill=blue!10, minimum width=3cm, minimum height=1.2cm, align=center, font=\small},
+        storage/.style={cylinder, draw=black, thick, aspect=0.25, fill=orange!20, minimum width=2.5cm, minimum height=3cm, shape border rotate=90, align=center, font=\small},
+        arrow/.style={-{Stealth[scale=1.2]}, thick}
+    ]
+    \node[storage] (gcs) {Cloud Storage\\ \texttt{bigdata-2026-02}\\ \texttt{/proyecto01}};
+    \node[box, right=3.2cm of gcs, fill=green!10] (master) {\textbf{Nodo Master}\\ Dataproc + Jupyter \\ (n2-highmem-4)};
+
+    \node[box, right=2cm of master, yshift=2cm] (worker1) {\textbf{Worker 1}\\ (n2-standard-4)};
+    \node[box, below=0.2cm of worker1] (worker2) {\textbf{Worker 2}\\ (n2-standard-4)};
+    \node[box, below=0.2cm of worker2] (worker3) {\textbf{Worker 3}\\ (n2-standard-4)};
+    \node[box, below=0.2cm of worker3] (worker4) {\textbf{Worker 4}\\ (n2-standard-4)};
+
+    \draw[arrow] (gcs.15) -- node[above, font=\scriptsize, pos=0.5] {Lee datos} (master.165);
+    \draw[arrow] (master.195) -- node[below, font=\scriptsize, pos=0.5] {Guarda resultados} (gcs.345);
+
+    \draw[arrow, dashed] (master.east) -- (worker1.west);
+    \draw[arrow, dashed] (master.east) -- (worker2.west);
+    \draw[arrow, dashed] (master.east) -- (worker3.west);
+    \draw[arrow, dashed] (master.east) -- (worker4.west);
+    \end{tikzpicture}
+    \caption{Arquitectura B: clúster Dataproc expandido a 4 nodos trabajadores para evidenciar escalabilidad horizontal.}
+    \label{fig:arqB}
+\end{figure}

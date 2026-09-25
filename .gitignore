@@ -1,0 +1,20 @@
+# Dataset: 700 MB, supera el limite de 100 MB por archivo de GitHub.
+# Se accede desde el bucket: gs://bigdata-2026-02/proyecto01/steam_reviews_500k.csv
+*.csv
+!informe/**/*.csv
+
+# Artefactos de compilacion de LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.pdf
+
+# Checkpoints de Jupyter
+.ipynb_checkpoints/
+__pycache__/

@@ -1,0 +1,277 @@
+% ====================== PROCESAMIENTO DISTRIBUIDO ====================
+\section{Procesamiento Distribuido}
+
+\subsection{Estrategia de Ejecución}
+Para garantizar la estabilidad del entorno y evitar el desbordamiento de memoria RAM (\textit{Out of Memory}) en el nodo Master, la ejecución de las consultas se orquestó dividiendo el flujo de trabajo en cuatro \textit{notebooks} independientes, uno por cada tecnología: Polars, Dask, Modin y Apache Spark. Esta estrategia de aislamiento de cargas asegura que cada motor disponga del 100\,\% de los recursos asignados sin competir en segundo plano, logrando una medición de tiempos justa.
+
+El protocolo de medición fue idéntico en los cuatro casos y en las dos arquitecturas:
+
+\begin{enumerate}[leftmargin=*]
+    \item El dataset se lee una sola vez al inicio del \textit{notebook}; esa lectura inicial \textbf{no} se contabiliza dentro de ninguna consulta.
+    \item Cada consulta se cronometra con \texttt{time.time()} inmediatamente antes y después del bloque de operaciones.
+    \item En los motores de evaluación diferida (\textit{lazy}), es decir Dask y Spark, cada consulta incluye explícitamente una acción de materialización (\texttt{.compute()}, \texttt{.count()} o \texttt{.show()}) dentro de la ventana cronometrada, de modo que el tiempo reportado corresponde a trabajo realmente ejecutado y no a la mera construcción del grafo de tareas.
+    \item Al finalizar, los diez tiempos se consolidan en un \texttt{DataFrame} y se exportan a \texttt{gs:/\bk{}/\bk{}bigdata-\bk{}2026-\bk{}02/\bk{}proyecto01/\bk{}tiempos\_\bk{}\{framework\}\_\{arquitectura\}.csv}.
+\end{enumerate}
+
+Este último punto es relevante para la validez de la comparativa: sin una acción forzada, Dask y Spark habrían reportado tiempos cercanos a cero, no por ser más rápidos, sino por no haber ejecutado nada todavía.
+
+\subsection{Configuración de Cada Motor}
+
+Las cuatro herramientas se inicializaron de forma distinta, y esas diferencias son determinantes para interpretar los resultados de rendimiento. La Tabla~\ref{tab:motores} las resume; el código de inicialización se entrega en el paquete de código fuente.
+
+\begin{table}[H]
+\centering
+\caption{Configuración de ejecución de cada motor}
+\label{tab:motores}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lp{4.2cm}p{5.2cm}@{}}
+\toprule
+\textbf{Motor} & \textbf{Modo de ejecución} & \textbf{Alcance en el clúster} \\
+\midrule
+Polars & Proceso único, paralelismo multihilo nativo (Rust) & Solo el nodo Master; lectura desde disco local tras copiar el objeto con \texttt{gsutil} \\[0.3cm]
+Dask & \textit{Scheduler} distribuido sobre un \texttt{LocalCluster} & Solo el nodo Master: el cliente se instancia sin dirección de clúster, por lo que levanta trabajadores locales \\[0.3cm]
+Modin & Motor Ray & Solo el nodo Master: sin el parámetro \texttt{address}, Ray crea un clúster local y no se conecta a YARN \\[0.3cm]
+Apache Spark & \texttt{SparkSession} sobre YARN & \textbf{Clúster completo}: hereda \texttt{spark.master=yarn} de Dataproc y lee directamente desde \texttt{gs://} mediante el conector de Cloud Storage \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La consecuencia es que \textbf{solo Apache Spark ejecuta trabajo en los nodos \textit{worker}}. Polars, Dask y Modin operan íntegramente sobre el nodo Master, lo que explica por sí solo buena parte de los resultados de la Sección~\ref{sec:rendimiento}.
+
+\paragraph{Una opción de lectura decisiva en Spark.} La lectura del CSV en Spark se configuró con \texttt{multiLine=True}. Es imprescindible para la integridad de los datos, porque el dataset contiene reseñas con saltos de línea reales dentro de campos de texto entrecomillados, y al mismo tiempo es el origen del principal cuello de botella observado. Este compromiso se analiza en la Sección~\ref{subsec:multiline}.
+
+\subsection{Fases del Procesamiento}
+El desarrollo técnico exigió la implementación de 10 consultas por herramienta, estructuradas en tres fases lógicas de ingeniería de datos:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Fase de exploración y limpieza (Consultas 1 a 3):} se partió de 500,000 registros. Se verificaron dimensiones, tipos de datos y valores nulos, y se realizó un tratamiento de calidad que identificó y eliminó 184,191 registros duplicados, artefactos del muestreo con reposición caracterizado en la Sección~\ref{subsec:muestreo}, dejando 315,809 registros útiles y validando la inexistencia de nulos en los campos críticos tras la limpieza.
+    \item \textbf{Fase de transformación (Consultas 4 y 5):} se generó la variable derivada \texttt{review\_length} (longitud en caracteres de cada reseña) y se aplicó el filtro de veredicto positivo, que aísla 266,640 reseñas recomendadas.
+    \item \textbf{Fase de análisis y métricas (Consultas 6 a 10):} se aplicaron agrupaciones, agregaciones y ordenamientos por videojuego para calcular volumen de reseñas, porcentaje de recomendación, promedio de horas jugadas, longitud media de reseña y un ranking final de títulos.
+\end{itemize}
+
+La Tabla~\ref{tab:cobertura} muestra cómo las 10 consultas cubren la totalidad de los tipos de operación exigidos por el enunciado del proyecto.
+
+\begin{table}[H]
+\centering
+\caption{Cobertura de los tipos de operación requeridos}
+\label{tab:cobertura}
+\vspace{0.2cm}
+\small
+\begin{tabular}{lc}
+\toprule
+\textbf{Operación requerida} & \textbf{Consultas que la implementan} \\
+\midrule
+Limpieza de datos                        & 1, 2, 3 \\
+Validación / exploración                 & 1, 3 \\
+Eliminación o tratamiento de duplicados  & 2 \\
+Tratamiento de valores nulos             & 3 \\
+Transformación de variables              & 4 \\
+Filtrado                                 & 5, 10 \\
+Agrupaciones                             & 6, 7, 8, 9, 10 \\
+Agregaciones                             & 6, 7, 8, 9, 10 \\
+Ordenamiento                             & 6, 7, 8, 9, 10 \\
+Cálculo de métricas                      & 5, 7, 8, 9, 10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\subsection{Análisis de Rendimiento}
+\label{sec:rendimiento}
+
+El aspecto más crítico del proyecto consistió en contrastar el manejo de recursos en memoria y la planificación de tareas distribuidas en el clúster Dataproc frente a un dataset de 500,000 registros. Todas las cifras que siguen provienen de los archivos CSV exportados automáticamente por los \textit{notebooks} al \textit{Data Lake} al terminar cada serie completa de diez consultas; esos CSV constituyen el registro de referencia de la medición y se entregan junto al código fuente. Las salidas visibles en los \textit{notebooks} pueden diferir puntualmente de ese registro cuando una celda se volvió a ejecutar después de la exportación, algo que ocurre en las Consultas 1 a 4 de Apache Spark sobre la Arquitectura B; las diferencias son del orden de segundos y no modifican ninguna de las conclusiones de esta sección.
+
+\subsubsection{Resultados en la Arquitectura A (1 Master, 2 Workers)}
+
+\begin{table}[H]
+\centering
+\caption{Tiempos de ejecución por consulta en la Arquitectura A (1 Master, 2 Workers)}
+\label{tab:tiemposA}
+\vspace{0.2cm}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Operación} & \textbf{Polars (s)} & \textbf{Modin (s)} & \textbf{Dask (s)} & \textbf{Spark (s)} \\
+\midrule
+Consulta 1 (Exploración)     &   0.010 &   0.80 &  15.47 &  24.14 \\
+Consulta 2 (Duplicados)      &   0.321 &   8.82 &  19.33 &  27.44 \\
+Consulta 3 (Nulos)           &   0.004 &   2.17 &  49.19 &  81.98 \\
+Consulta 4 (Transformar)     &   0.050 &   0.56 &  23.79 &  32.52 \\
+Consulta 5 (Filtrar)         &   0.008 &   1.84 &  35.38 &  46.28 \\
+Consulta 6 (Agrupación)      &   0.046 &   0.99 &  11.72 &  34.42 \\
+Consulta 7 (Métricas \%)     &   0.030 &   1.25 &  12.34 &  32.73 \\
+Consulta 8 (Promedios)       &   0.033 &   3.21 &  11.79 &  32.32 \\
+Consulta 9 (Longitudes)      &   0.034 &   0.70 &  12.14 &  32.31 \\
+Consulta 10 (Ranking)        &   0.031 &   1.12 &  12.04 &  32.84 \\
+\midrule
+\textbf{Total acumulado}      & \textbf{0.567} & \textbf{21.45} & \textbf{203.18} & \textbf{376.97} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Evidencia de ejecución de las cuatro herramientas.} Las capturas siguientes muestran la misma operación, la eliminación de duplicados de la Consulta~2, resuelta por cada motor sobre el clúster. Los tres resultados coinciden en 315,809 registros y 184,191 duplicados eliminados; lo que cambia es el tiempo y, sobre todo, el modo de ejecución.
+
+\captura{consultas/2w/modin/02.png}{Modin sobre Ray: misma operación resuelta en 8.82\,s, con el motor operando sobre el nodo Master.}
+
+\captura{consultas/2w/dask/05.png}{Dask: ejecución diferida con particiones sobre un \texttt{LocalCluster}, restringido al nodo Master.}
+
+\captura{consultas/2w/spark/02.png}{Apache Spark sobre YARN: la barra de progreso \texttt{[Stage 14: ...]} evidencia la ejecución distribuida real en los nodos \textit{worker} del clúster.}
+
+El orden de magnitud entre herramientas es la observación dominante: completar las diez consultas toma \textbf{0.567\,s} con Polars, \textbf{21.45\,s} con Modin, \textbf{203.18\,s} con Dask y \textbf{376.97\,s} con Apache Spark. Es decir, Spark resulta \textbf{665 veces más lento} que Polars, y Dask \textbf{358 veces} más lento, pese a ejecutar exactamente la misma lógica sobre los mismos datos y producir resultados idénticos.
+
+El análisis por herramienta es el siguiente:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Polars (ejecución local optimizada).} Resolvió la totalidad de las consultas en fracciones de segundo: 0.321\,s en la eliminación de duplicados, que es la operación más costosa de su serie, y milisegundos en filtros y agregaciones. Su motor nativo en Rust, con paralelismo multihilo y representación columnar Arrow en memoria, maximiza el uso de la memoria vertical del nodo Master. Para volúmenes que caben holgadamente en la RAM física del equipo, es la opción más rápida por un margen que no admite discusión.
+
+    \item \textbf{Modin (paralelismo sobre el Master).} Gracias a los 32 GB del nodo \texttt{n2-highmem-4}, el motor Ray subyacente completó todas las operaciones sin colapsar, con tiempos competitivos (0.556\,s en transformaciones, 8.82\,s en la deduplicación). Opera como un puente eficiente para paralelizar código de Pandas sin reescribirlo, pero depende exclusivamente del nodo Master: como se documenta en el propio \textit{notebook}, \texttt{ray.init()} sin un parámetro \texttt{address} explícito levanta un clúster de Ray local y no se conecta al gestor YARN de Dataproc.
+
+    \item \textbf{Dask (evaluación diferida y particionado).} Al utilizar un \textit{scheduler} para manejar particiones de datos mediante un \texttt{LocalCluster} igualmente restringido al nodo Master, los tiempos se elevan de forma notable: 19.33\,s en la eliminación de duplicados y 49.19\,s en el tratamiento de nulos. El costo de orquestación de tareas (\textit{overhead}) penaliza el rendimiento en datasets de medio millón de registros, donde serializar, particionar y recomponer el dato cuesta más que procesarlo directamente.
+
+    \item \textbf{Apache Spark (cómputo distribuido sobre YARN).} A diferencia de los frameworks anteriores, Spark sí estableció conexión real con el gestor de recursos YARN del clúster (\texttt{spark.master=yarn}), delegando trabajo a los nodos \textit{worker}. Aun así, presentó los tiempos más altos de la comparativa (de 24.14\,s a 81.98\,s por consulta). Como se detalla en la Sección~\ref{subsec:diagnostico-spark}, esto no se debe a una limitación de acceso al clúster, sino a la naturaleza de las opciones de lectura del dataset y al comportamiento adaptativo de su motor de ejecución frente a un volumen de datos comparativamente pequeño para su arquitectura.
+\end{itemize}
+
+\subsubsection{Prueba de Escalabilidad Horizontal (Arquitectura B: 1 Master, 4 Workers)}
+
+Para validar empíricamente los beneficios del procesamiento distribuido, se provisionó una segunda arquitectura escalando el clúster a 4 nodos trabajadores (\texttt{n2-standard-4}), duplicando la capacidad de cómputo de los \textit{workers} de 8 a 16 vCPU y manteniendo el mismo tipo de nodo Master para aislar la variable de estudio.
+
+\begin{table}[H]
+\centering
+\caption{Tiempos de ejecución por consulta en la Arquitectura B (1 Master, 4 Workers)}
+\label{tab:tiemposB}
+\vspace{0.2cm}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Operación} & \textbf{Polars (s)} & \textbf{Modin (s)} & \textbf{Dask (s)} & \textbf{Spark (s)} \\
+\midrule
+Consulta 1 (Exploración)     &   0.001 &   0.64 &  16.39 &  24.53 \\
+Consulta 2 (Duplicados)      &   0.318 &   8.99 &  19.77 &  26.94 \\
+Consulta 3 (Nulos)           &   0.002 &   2.09 &  50.68 &  81.75 \\
+Consulta 4 (Transformar)     &   0.043 &   0.59 &  23.63 &  31.91 \\
+Consulta 5 (Filtrar)         &   0.010 &   5.30 &  35.87 &  46.07 \\
+Consulta 6 (Agrupación)      &   0.035 &   1.36 &  12.09 &  31.13 \\
+Consulta 7 (Métricas \%)     &   0.030 &   1.05 &  12.88 &  32.34 \\
+Consulta 8 (Promedios)       &   0.032 &   1.10 &  12.25 &  32.23 \\
+Consulta 9 (Longitudes)      &   0.044 &   0.68 &  12.35 &  31.51 \\
+Consulta 10 (Ranking)        &   0.041 &   1.08 &  12.58 &  30.43 \\
+\midrule
+\textbf{Total acumulado}      & \textbf{0.557} & \textbf{22.90} & \textbf{208.49} & \textbf{368.82} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los resultados arrojaron tiempos prácticamente idénticos a los de la Arquitectura A en los cuatro frameworks evaluados, como resume la Tabla~\ref{tab:comparativa}.
+
+\begin{table}[H]
+\centering
+\caption{Comparativa Arquitectura A (2 Workers) frente a Arquitectura B (4 Workers): tiempo total de las 10 consultas}
+\label{tab:comparativa}
+\vspace{0.2cm}
+\begin{tabular}{lrrrrl}
+\toprule
+\textbf{Herramienta} & \textbf{A (s)} & \textbf{B (s)} & \textbf{$\Delta$ (s)} & \textbf{$\Delta$ (\%)} & \textbf{\textquestiondown{}Usa los workers?} \\
+\midrule
+Polars & 0.567 & 0.557 & -0.011 & -1.86 & No (local al Master) \\
+Modin & 21.450 & 22.899 & +1.449 & +6.75 & No (Ray local) \\
+Dask & 203.176 & 208.487 & +5.311 & +2.61 & No (LocalCluster) \\
+Apache Spark & 376.972 & 368.819 & -8.153 & -2.16 & Sí (YARN) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las variaciones observadas se sitúan entre $-2.16$\,\% y $+6.75$\,\%, magnitudes que corresponden al ruido normal de medición en un entorno de nube compartido (variabilidad de la red, contención de recursos del hipervisor, estado de las cachés) y no a un efecto atribuible al número de \textit{workers}. Notoriamente, Modin y Dask fueron \textit{más lentos} en la arquitectura ampliada, lo que descarta cualquier interpretación de mejora marginal.
+
+Este comportamiento se explica por dos fenómenos de naturaleza distinta:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Restricciones de ejecución local (Polars, Dask, Modin).} Las herramientas configuradas sin conexión explícita al gestor de recursos YARN levantaron clústeres locales (\texttt{LocalCluster} en Dask, instancia local de Ray en Modin) o directamente no son distribuidas (Polars). Esto limitó su ejecución a los recursos físicos del nodo Master, haciendo invisibles los nodos trabajadores adicionales de la Arquitectura B. Para estas tres herramientas, el resultado era esperable: la prueba lo confirma de forma cuantitativa.
+
+    \item \textbf{Comportamiento adaptativo de Spark.} A diferencia de los casos anteriores, Spark sí opera sobre el clúster distribuido real vía YARN. La ausencia de mejora no se debe a una limitación de acceso, sino a un conjunto de mecanismos internos del motor de ejecución que se detallan y comprueban empíricamente en la Sección~\ref{subsec:diagnostico-spark}.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{Apache Spark: tiempos por consulta en ambas arquitecturas}
+\label{tab:spark-ab}
+\vspace{0.2cm}
+\small
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Operación} & \textbf{2 Workers (s)} & \textbf{4 Workers (s)} & \textbf{Variación (s)} \\
+\midrule
+Consulta 1 (Exploración)     &  24.14 &  24.53 &  +0.38 \\
+Consulta 2 (Duplicados)      &  27.44 &  26.94 &  -0.50 \\
+Consulta 3 (Nulos)           &  81.98 &  81.75 &  -0.23 \\
+Consulta 4 (Transformar)     &  32.52 &  31.91 &  -0.61 \\
+Consulta 5 (Filtrar)         &  46.28 &  46.07 &  -0.21 \\
+Consulta 6 (Agrupación)      &  34.42 &  31.13 &  -3.29 \\
+Consulta 7 (Métricas \%)     &  32.73 &  32.34 &  -0.39 \\
+Consulta 8 (Promedios)       &  32.32 &  32.23 &  -0.09 \\
+Consulta 9 (Longitudes)      &  32.31 &  31.51 &  -0.80 \\
+Consulta 10 (Ranking)        &  32.84 &  30.43 &  -2.41 \\
+\midrule
+\textbf{Total} & \textbf{376.97} & \textbf{368.82} & \textbf{-8.15} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Diagnóstico Empírico: \textquestiondown{}Por qué Spark no escaló?}
+\label{subsec:diagnostico-spark}
+
+A diferencia de Dask y Modin, cuya falta de escalamiento se explica por una configuración de clúster local, el caso de Spark requirió un diagnóstico más profundo, ya que sí establece conexión real con YARN. Se identificaron tres mecanismos concurrentes, verificados directamente sobre el clúster y sobre los registros de eventos (\textit{event logs}) generados por la aplicación Spark.
+
+\paragraph{a) Lectura no paralelizable por la opción \texttt{multiLine}.}
+El dataset contiene reseñas con saltos de línea reales dentro de campos de texto entre comillas, por lo que la lectura requiere la opción \texttt{multiLine=True} para no fragmentar registros incorrectamente. Esta opción, sin embargo, obliga a Spark a tratar el archivo completo como una única unidad no divisible, ya que no puede garantizar la integridad de un registro multilínea si particiona el archivo por bytes. Se verificó empíricamente:
+
+\begin{lstlisting}[style=sh]
+Particiones tras la lectura inicial (dfs.rdd.getNumPartitions()): 1
+\end{lstlisting}
+
+Es decir, la etapa de lectura y parseo del archivo de 667.7 MiB se ejecuta íntegramente en una sola tarea, sobre un único núcleo, independientemente del número de \textit{workers} disponibles en el clúster.
+
+\paragraph{b) \textit{Adaptive Query Execution} (AQE) colapsa las particiones de \textit{shuffle}.}
+Spark 3.5.3, versión desplegada por Dataproc en la imagen \texttt{2.3-debian12}, tiene activo por defecto el motor de ejecución adaptativa (\texttt{spark.\bk{}sql.\bk{}adaptive.\bk{}enabled=\bk{}true}). Aunque el clúster está configurado con \texttt{spark.\bk{}sql.\bk{}shuffle.\bk{}partitions=\bk{}1000}, AQE ajusta dinámicamente el número real de particiones tras el \textit{shuffle} en función del volumen de datos efectivamente movido. Dado que las operaciones de agregación (\texttt{groupBy}, \texttt{dropDuplicates}) sobre 500,000 registros producen resultados intermedios comparativamente pequeños, AQE fusiona las particiones nominales en un número mucho menor de particiones físicas:
+
+\begin{lstlisting}[style=sh]
+spark.sql.shuffle.partitions (configurado): 1000
+Particiones reales tras groupBy("game").count(): 2
+\end{lstlisting}
+
+Este comportamiento es intencional y beneficioso en un entorno de producción con datos de tamaño variable, pero implica que, para este volumen de datos, el motor de Spark determina de forma autónoma que no se requiere más paralelismo, sin importar cuántos núcleos adicionales estén disponibles en el clúster.
+
+\paragraph{c) \textit{Dynamic Allocation} nunca solicitó más recursos de los necesarios.}
+El clúster tiene habilitada la asignación dinámica de \textit{executors} (\texttt{spark.\bk{}dynamicAllocation.\bk{}enabled=\bk{}true}, con un mínimo de 1 y un máximo de 10,000). Este mecanismo solicita nuevos \textit{executors} a YARN únicamente cuando detecta tareas en cola esperando recursos. El análisis del \textit{event log} de la aplicación \texttt{application\_\bk{}1790005002581\_\bk{}0001}, ejecutada sobre la Arquitectura B, muestra que en ningún momento se utilizaron más de 3 \textit{executors} concurrentes:
+
+\begin{table}[H]
+\centering
+\caption{\textit{Executors} realmente utilizados durante la ejecución en la Arquitectura B (4 Workers)}
+\label{tab:executors}
+\vspace{0.2cm}
+\small
+\begin{tabular}{llrl}
+\toprule
+\textbf{Executor ID} & \textbf{Nodo Worker} & \textbf{Núcleos} & \textbf{Momento de asignación} \\
+\midrule
+1 & \texttt{cluster-\bk{}spark-\bk{}4w-\bk{}w-\bk{}3} & 2 & Inicio de la aplicación \\
+2 & \texttt{cluster-\bk{}spark-\bk{}4w-\bk{}w-\bk{}1} & 2 & Inicio de la aplicación ($+0.1$\,s) \\
+3 & \texttt{cluster-\bk{}spark-\bk{}4w-\bk{}w-\bk{}1} & 2 & $+111$\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+De los 4 nodos \textit{worker} provisionados (16 vCPU disponibles en total), la aplicación únicamente utilizó 2 nodos (\texttt{w-1} y \texttt{w-3}), con un máximo de 6 núcleos activos simultáneamente. Esto confirma que la ausencia de mejora al escalar de 2 a 4 \textit{workers} no obedece a que Spark ignore el clúster distribuido, sino a que el propio planificador de recursos, correctamente, nunca detectó una demanda de trabajo suficiente para justificar la asignación de \textit{executors} adicionales.
+
+\paragraph{Síntesis.} Los tres mecanismos son consistentes entre sí y convergen en una misma conclusión: el volumen de trabajo por etapa, una tarea de lectura y entre 2 y 5 tareas de \textit{shuffle}, resultó insuficiente para activar el escalamiento horizontal del clúster, independientemente de la capacidad física adicional disponible en la Arquitectura B.
+
+\subsubsection{Decisión de Diseño: Integridad de Datos frente a Paralelismo de Lectura}
+\label{subsec:multiline}
+
+Se evaluó la alternativa de omitir la opción \texttt{multiLine=True} para permitir que Spark particionara el archivo de entrada en múltiples tareas paralelas. Sin embargo, al desactivar esta opción, Spark reportó \textbf{500,027} registros en lugar de los 500,000 esperados, evidenciando que el analizador de líneas interpretó erróneamente saltos de línea contenidos dentro de campos de texto entre comillas (columna \texttt{review}) como delimitadores de nuevos registros, fragmentando y corrompiendo un número indeterminado de reseñas.
+
+Se decidió conservar \texttt{multiLine=True} en todas las pruebas, priorizando la integridad y exactitud de los datos procesados por sobre la velocidad de la etapa de lectura. Esta decisión, si bien introduce el cuello de botella descrito en la Sección~\ref{subsec:diagnostico-spark}, se considera metodológicamente correcta: un procesamiento distribuido más rápido sobre datos corruptos no constituye un resultado válido para efectos de este proyecto. Es además la decisión que garantiza que los 184,191 duplicados detectados y los 266,640 registros positivos filtrados sean cifras comparables con las que reportan Polars, Dask y Modin.
+
+\subsubsection{Conclusión de Escalabilidad}
+
+La prueba demuestra que escalar horizontalmente solo produce mejoras de rendimiento cuando el volumen y la granularidad de los datos generan suficientes unidades de trabajo paralelizables para activar los mecanismos de asignación dinámica de recursos del clúster. Para un dataset de 667.7 MiB, ninguna de las cuatro tecnologías evaluadas se benefició de escalar de 2 a 4 \textit{workers}: Polars, Dask y Modin por operar de forma local al nodo Master, y Spark porque las decisiones deliberadas de integridad de datos (\texttt{multiLine=True}), combinadas con el comportamiento adaptativo del motor de ejecución (AQE y \textit{Dynamic Allocation}), resultaron en una demanda de recursos insuficiente para justificar el uso del clúster ampliado.
+
+Esto sugiere que, para esta topología y este tamaño de dataset, la Arquitectura A constituye el punto de equilibrio óptimo entre costo y rendimiento, y que un beneficio real de la Arquitectura B solo se manifestaría ante volúmenes de datos significativamente mayores o ante una reconfiguración explícita de Spark: particionado previo del archivo de entrada (por ejemplo, a formato Parquet dividido en bloques), desactivación de AQE o asignación estática de \textit{executors}.

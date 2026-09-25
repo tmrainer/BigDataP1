@@ -1,0 +1,258 @@
+% ================== OPERACIONES Y RESULTADOS =========================
+\section{Operaciones}
+\label{sec:operaciones}
+
+Esta sección documenta las diez operaciones implementadas sobre el dataset, con su objetivo, el tipo de operación que materializa y el resultado obtenido en la ejecución sobre Google Cloud Dataproc. Las cuatro herramientas ejecutan la \textbf{misma lógica} sobre los \textbf{mismos datos}, y esa equivalencia se verificó consulta por consulta: es el requisito que hace comparables los tiempos de la Sección~\ref{sec:rendimiento}.
+
+La verificación arrojó coincidencia exacta en las Consultas 1 a 5 y en la 10, y \textbf{una única divergencia sistemática} en las Consultas 6 a 9, documentada en la Sección~\ref{subsec:divergencia}. No se trata de un error de implementación, sino de una diferencia de semántica entre las API que resulta instructiva por sí misma.
+
+Cada consulta se acompaña de la captura de su ejecución en el entorno de JupyterLab del clúster. Las capturas corresponden a la implementación en Polars por ser la de salida más legible; la Sección~\ref{sec:rendimiento} incluye las evidencias equivalentes de Dask, Modin y Apache Spark. El código fuente completo de las cuatro herramientas se entrega por separado, fuera de este informe.
+
+\begin{table}[H]
+\centering
+\caption{Resumen de las 10 operaciones implementadas y su resultado principal}
+\label{tab:resumen-consultas}
+\vspace{0.2cm}
+\small
+\begin{tabular}{clp{7.4cm}}
+\toprule
+\textbf{\#} & \textbf{Operación} & \textbf{Resultado principal} \\
+\midrule
+1  & Exploración         & 500,000 filas $\times$ 24 columnas; nulos solo en \texttt{game} (35) y \texttt{steam\_\bk{}china\_\bk{}location} (499,985) \\
+2  & Duplicados          & 184,191 duplicados eliminados; quedan 315,809 registros \\
+3  & Nulos               & 0 registros eliminados: \texttt{review} está 100\,\% poblada \\
+4  & Transformación      & Variable \texttt{review\_length} creada sobre 315,809 registros \\
+5  & Filtrado            & 266,640 reseñas positivas; tasa global de recomendación 84.43\,\% \\
+6  & Agrupación          & 22,992 juegos; Counter-Strike 2 lidera con 1,923 reseñas \\
+7  & Métrica \%          & 22,992 juegos; el \textit{top} por \% lo ocupan títulos con 1--4 reseñas \\
+8  & Promedios           & Máximo de 2.18 M minutos promedio; dominado por valores atípicos \\
+9  & Longitudes          & Techo de 8,000 caracteres: límite impuesto por Steam \\
+10 & Ranking             & 609 juegos con $\geq$ 100 reseñas; Left 4 Dead 2 lidera con 100\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Consulta 1: Exploración y validación del dataset}
+
+\textbf{Tipo de operación:} Validación / exploración.
+
+\textbf{Objetivo:} Conocer dimensiones, estructura, tipos de datos y conteo de valores nulos del dataset crudo.
+
+\captura{consultas/2w/polars/01.png}{Ejecución y resultado de la Consulta 1 (Exploración y validación del dataset) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+El dataset crudo contiene \textbf{500,000 filas} y \textbf{24 columnas}. La inferencia de tipos asignó \texttt{Int64} a las 19 variables numéricas, \texttt{Float64} a \texttt{weighted\_vote\_score} y \texttt{String} a \texttt{game}, \texttt{language}, \texttt{review} y \texttt{steam\_\bk{}china\_\bk{}location}.
+
+El conteo de nulos reveló dos hallazgos relevantes: \texttt{game} presenta \textbf{35} valores faltantes, que corresponden a títulos retirados del catálogo cuyo nombre la API ya no resuelve, y \texttt{steam\_\bk{}china\_\bk{}location} presenta \textbf{499,985} nulos, es decir, está vacía en el 99.997\,\% de los registros. Las 22 columnas restantes no registran ningún valor nulo. Se concluye que \texttt{steam\_\bk{}china\_\bk{}location} no aporta información analítica y que la calidad del resto del conjunto es alta.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.010\,s \textbar{} Modin 0.805\,s \textbar{} Dask 15.47\,s \textbar{} Spark 24.14\,s.
+
+
+\subsection{Consulta 2: Eliminación de duplicados}
+
+\textbf{Tipo de operación:} Tratamiento de duplicados.
+
+\textbf{Objetivo:} Eliminar registros repetidos considerando la terna (\texttt{author\_steamid}, \texttt{appid}, \texttt{review}).
+
+\captura{consultas/2w/polars/02.png}{Ejecución y resultado de la Consulta 2 (Eliminación de duplicados) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Se eliminaron \textbf{184,191} registros duplicados (36.8\,\% del total), pasando de \textbf{500,000} a \textbf{315,809} registros únicos. Las cuatro herramientas devolvieron exactamente el mismo resultado, lo que valida su equivalencia funcional y descarta que las diferencias de tiempo posteriores provengan de trabajos distintos.
+
+\textbf{Origen de los duplicados.} Como se demuestra en la Sección~\ref{subsec:muestreo}, estos registros \textbf{no} son reediciones capturadas por la API de Steam, sino copias exactas introducidas por el muestreo con reposición que construyó el archivo de trabajo. La medición directa sobre el CSV lo confirma: las 315,809 combinaciones distintas de la clave coinciden exactamente con el número de filas completas distintas del archivo.
+
+\textbf{Sobre la elección de la clave.} Se deduplicó por la terna en lugar de por \texttt{recommendationid}. El archivo contiene 315,031 valores distintos de ese identificador frente a 315,809 combinaciones distintas de la terna: los \textbf{778} registros de diferencia son reediciones reales de una misma reseña capturadas en momentos distintos. La clave compuesta las conserva como observaciones independientes; una deduplicación por identificador técnico las habría colapsado.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.321\,s \textbar{} Modin 8.82\,s \textbar{} Dask 19.33\,s \textbar{} Spark 27.44\,s.
+
+
+\subsection{Consulta 3: Tratamiento de valores nulos}
+
+\textbf{Tipo de operación:} Limpieza de datos.
+
+\textbf{Objetivo:} Identificar valores faltantes tras la deduplicación y eliminar registros sin contenido en \texttt{review}.
+
+\captura{consultas/2w/polars/03.png}{Ejecución y resultado de la Consulta 3 (Tratamiento de valores nulos) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Sobre los 315,809 registros deduplicados, el recuento de nulos quedó en \textbf{22} para \texttt{game} y \textbf{315,797} para \texttt{steam\_\bk{}china\_\bk{}location}; el resto de columnas, incluida \texttt{review}, sin nulos.
+
+En consecuencia, la eliminación de registros sin reseña descartó \textbf{0} filas y el conjunto se mantuvo en \textbf{315,809}. Lejos de ser un resultado vacío, este es el criterio de validación buscado: confirma que la variable central del análisis está íntegramente poblada y que ningún indicador posterior se calcula sobre contenido faltante.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.004\,s \textbar{} Modin 2.17\,s \textbar{} Dask 49.19\,s \textbar{} Spark 81.98\,s.
+
+
+\subsection{Consulta 4: Transformación de variables}
+
+\textbf{Tipo de operación:} Transformación de variables.
+
+\textbf{Objetivo:} Crear la variable derivada \texttt{review\_length} con la cantidad de caracteres de cada reseña.
+
+\captura{consultas/2w/polars/04.png}{Ejecución y resultado de la Consulta 4 (Transformación de variables) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Se generó \texttt{review\_length} sobre los \textbf{315,809} registros limpios. Los valores observados en la muestra de control abarcan desde reseñas de 48 y 49 caracteres hasta textos de 1,104 caracteres, confirmando la alta dispersión de la variable.
+
+Esta nueva característica habilita la Consulta~9 y, en términos de negocio, funciona como aproximación al grado de elaboración de la opinión: las reseñas extensas tienden a corresponder a jugadores con mayor tiempo invertido en el título.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.050\,s \textbar{} Modin 0.556\,s \textbar{} Dask 23.79\,s \textbar{} Spark 32.52\,s.
+
+
+\subsection{Consulta 5: Filtrado de reseñas recomendadas}
+
+\textbf{Tipo de operación:} Filtrado y cálculo de métricas.
+
+\textbf{Objetivo:} Seleccionar los registros con veredicto positivo (\texttt{voted\_up} = 1) y calcular la tasa global de recomendación.
+
+\captura{consultas/2w/polars/05.png}{Ejecución y resultado de la Consulta 5 (Filtrado de reseñas recomendadas) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+De los \textbf{315,809} registros limpios, \textbf{266,640} corresponden a reseñas positivas, lo que arroja una \textbf{tasa global de recomendación del 84.43\,\%}.
+
+Este es el primer indicador de valor del proyecto: en la muestra analizada, cinco de cada seis reseñas son favorables. El dato fija la línea base contra la cual debe compararse cualquier título individual: un juego con 80\,\% de recomendación está por debajo de la media de la muestra, no por encima, pese a que el valor absoluto parezca alto.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.008\,s \textbar{} Modin 1.84\,s \textbar{} Dask 35.38\,s \textbar{} Spark 46.28\,s.
+
+
+\subsection{Consulta 6: Cantidad de reseñas por videojuego}
+
+\textbf{Tipo de operación:} Agrupación, agregación y ordenamiento.
+
+\textbf{Objetivo:} Agrupar por \texttt{game} y contar el total de reseñas por título, ordenando de mayor a menor.
+
+\captura{consultas/2w/polars/06.png}{Ejecución y resultado de la Consulta 6 (Cantidad de reseñas por videojuego) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+La agrupación procesó \textbf{22,992} videojuegos distintos en Polars y Apache Spark, y \textbf{22,991} en Dask y Modin. Esa diferencia de una unidad es sistemática, tiene una causa identificada y se analiza en la Sección~\ref{subsec:divergencia}. El \textit{Top 10} por volumen lo encabezan \textit{Counter-Strike 2} (1,923 reseñas), \textit{PUBG: BATTLEGROUNDS} (1,513), \textit{Stardew Valley} (1,413), \textit{Terraria} (1,264) y \textit{The Witcher 3: Wild Hunt} (1,228).
+
+El resultado valida la representatividad interna de la muestra: los títulos más reseñados coinciden con los superventas históricos de la plataforma. Además, con 22,992 juegos y un máximo de 1,923 reseñas, se evidencia una distribución de cola larga extrema, en la que el título más popular concentra apenas el 0.6\,\% de las reseñas.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.046\,s \textbar{} Modin 0.991\,s \textbar{} Dask 11.72\,s \textbar{} Spark 34.42\,s.
+
+
+\subsection{Consulta 7: Porcentaje de recomendación por videojuego}
+
+\textbf{Tipo de operación:} Agrupación, agregación múltiple y métrica derivada.
+
+\textbf{Objetivo:} Calcular, por juego, el total de reseñas, el total de reseñas positivas y el porcentaje de recomendación.
+
+\captura{consultas/2w/polars/07.png}{Ejecución y resultado de la Consulta 7 (Porcentaje de recomendación por videojuego) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Se calculó el indicador sobre los \textbf{22,992} juegos. El ordenamiento directo por porcentaje descendente resultó, sin embargo, \textbf{analíticamente inútil}: las diez primeras posiciones están ocupadas por títulos con 100\,\% de recomendación pero con entre \textbf{1 y 4 reseñas} en total.
+
+Este hallazgo es metodológicamente valioso: un porcentaje calculado sobre una sola observación no es una medida de calidad, sino ruido estadístico. Es precisamente la razón por la cual la Consulta~10 incorpora un umbral mínimo de volumen antes de construir el ranking definitivo.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.030\,s \textbar{} Modin 1.25\,s \textbar{} Dask 12.34\,s \textbar{} Spark 32.73\,s.
+
+
+\subsection{Consulta 8: Promedio de horas jugadas por videojuego}
+
+\textbf{Tipo de operación:} Agrupación, agregación (media) y ordenamiento.
+
+\textbf{Objetivo:} Calcular el promedio de \texttt{author\_\bk{}playtime\_\bk{}forever} por juego, como aproximación a la fidelización.
+
+\captura{consultas/2w/polars/08.png}{Ejecución y resultado de la Consulta 8 (Promedio de horas jugadas por videojuego) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Se procesaron los \textbf{22,992} juegos. Los valores máximos alcanzan promedios de \textbf{2.18 millones de minutos}, más de 36,000 horas, para títulos prácticamente desconocidos.
+
+La interpretación correcta de estas cifras no es «son los juegos más adictivos». Se trata de títulos con muy pocas reseñas en la muestra, cuyos autores mantienen Steam abierto de forma permanente o usan software que deja el contador activo en segundo plano. El promedio simple, sin ponderar por número de observaciones ni acotar valores atípicos, es altamente sensible a estos casos extremos: ese es el segundo hallazgo metodológico del análisis.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.033\,s \textbar{} Modin 3.21\,s \textbar{} Dask 11.79\,s \textbar{} Spark 32.32\,s.
+
+
+\subsection{Consulta 9: Longitud promedio de reseñas por videojuego}
+
+\textbf{Tipo de operación:} Agrupación, agregación (media) y ordenamiento.
+
+\textbf{Objetivo:} Calcular el promedio de \texttt{review\_length} agrupado por \texttt{game}.
+
+\captura{consultas/2w/polars/09.png}{Ejecución y resultado de la Consulta 9 (Longitud promedio de reseñas por videojuego) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Se procesaron los \textbf{22,992} juegos. El ordenamiento descendente revela un techo nítido en \textbf{8,000.0} caracteres exactos, compartido por varios títulos, seguido de valores de 7,999 y 7,998.
+
+Este patrón no es casual: refleja el \textbf{límite de 8,000 caracteres} que impone Steam al texto de una reseña. Los primeros puestos corresponden, por tanto, a juegos con una única reseña que llega al tope permitido. La detección de este techo artificial es un ejemplo directo de validación de datos: sin este análisis, la variable podría interpretarse erróneamente como una medida continua sin cota superior.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.034\,s \textbar{} Modin 0.702\,s \textbar{} Dask 12.14\,s \textbar{} Spark 32.31\,s.
+
+
+\subsection{Consulta 10: Ranking final de videojuegos}
+
+\textbf{Tipo de operación:} Agrupación, agregación, filtrado y ordenamiento múltiple.
+
+\textbf{Objetivo:} Construir el ranking definitivo combinando porcentaje de recomendación y volumen, exigiendo un mínimo de 100 reseñas por título.
+
+\captura{consultas/2w/polars/10.png}{Ejecución y resultado de la Consulta 10 (Ranking final de videojuegos) en el clúster de Dataproc.}
+
+\paragraph{Resultado.}
+Tras aplicar el umbral de \textbf{100 reseñas mínimas}, el universo se reduce de 22,992 a \textbf{609} videojuegos estadísticamente comparables. Encabezan el ranking \textit{Left 4 Dead 2} (821 reseñas, 100\,\% positivas), \textit{Subnautica} (807, 100\,\%), \textit{Mirror} (604) y \textit{Plants vs. Zombies: Game of the Year} (532).
+
+Este sí constituye un indicador accionable: a diferencia del resultado de la Consulta~7, aquí el 100\,\% de recomendación está respaldado por cientos de observaciones independientes. El ordenamiento secundario por volumen resuelve los empates en el porcentaje, que de otro modo serían arbitrarios.
+
+Resulta además significativo que el corte de 100 reseñas descarte al 97.4\,\% de los títulos (22,383 de 22,992): la conclusión de negocio es que, en un catálogo de cola larga como el de Steam, cualquier tablero de indicadores basado en porcentajes debe incorporar un umbral de volumen para no quedar dominado por el ruido.
+
+\paragraph{Tiempos de ejecución (Arquitectura A).}
+Polars 0.031\,s \textbar{} Modin 1.12\,s \textbar{} Dask 12.04\,s \textbar{} Spark 32.84\,s.
+
+
+\subsection{Divergencia entre Herramientas: el Tratamiento de Claves Nulas}
+\label{subsec:divergencia}
+
+La verificación cruzada de los resultados reveló una discrepancia constante en las Consultas 6 a 9, las que agrupan por videojuego. El número de grupos obtenido no es el mismo en las cuatro herramientas.
+
+\begin{table}[H]
+\centering
+\caption{Grupos obtenidos al agrupar por \texttt{game}, por herramienta y consulta}
+\label{tab:divergencia}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Herramienta} & \textbf{Consulta 6} & \textbf{Consulta 7} & \textbf{Consulta 8} & \textbf{Consulta 9} \\
+\midrule
+Polars        & 22,992 & 22,992 & 22,992 & 22,992 \\
+Apache Spark  & 22,992 & 22,992 & 22,992 & 22,992 \\
+Dask          & 22,991 & 22,991 & 22,992 & 22,992 \\
+Modin         & 22,991 & 22,991 & 22,991 & 22,991 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Causa.} La diferencia procede del tratamiento por defecto de las claves nulas en la operación de agrupamiento, y no de ningún error en la lógica implementada:
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{groupby()} de \textbf{pandas}, y por herencia el de \textbf{Modin} y \textbf{Dask}, aplica \texttt{dropna=True} por defecto: \textbf{descarta} las filas cuya clave de agrupamiento es nula.
+    \item \texttt{group\_by()} de \textbf{Polars} y \texttt{groupBy()} de \textbf{Apache Spark} \textbf{conservan} el valor nulo como un grupo más.
+\end{itemize}
+
+La Consulta~3 había documentado que, tras la deduplicación, la columna \texttt{game} conserva \textbf{22 valores nulos}, correspondientes a títulos retirados del catálogo cuyo nombre la API ya no resuelve. Esas 22 filas forman un único grupo adicional bajo la semántica de Polars y Spark, lo que explica con exactitud la unidad de diferencia: $22{,}991 + 1 = 22{,}992$.
+
+\paragraph{Por qué Dask coincide en las Consultas 8 y 9.} Dask reporta 22,992 en las agregaciones de media (\texttt{mean}) pese a usar la semántica de pandas. El motivo es que su planificador calcula esas agregaciones por particiones y recompone el resultado en una etapa final, en la que el grupo nulo reaparece en el índice. Es un detalle de implementación de su motor diferido, no una diferencia de criterio.
+
+\paragraph{Implicaciones.} El efecto sobre los indicadores del proyecto es nulo en términos prácticos: las 22 filas afectadas representan el 0.007\,\% de los 315,809 registros limpios y no alteran ninguna de las posiciones del \textit{Top 10} ni del ranking final, donde el umbral de 100 reseñas las excluye de todos modos. Las cuatro herramientas devuelven \textbf{609} videojuegos en la Consulta~10.
+
+El hallazgo es, sin embargo, relevante desde el punto de vista de la ingeniería de datos. Demuestra que \textbf{migrar una carga de trabajo entre motores no es una operación neutra}: dos implementaciones sintácticamente equivalentes pueden diferir en el valor por defecto de un parámetro y producir resultados distintos sin emitir ninguna advertencia. En un entorno de producción, donde la columna de agrupamiento podría tener un porcentaje de nulos mucho mayor, esta discrepancia silenciosa sería una fuente real de error. La forma de eliminarla es explicitar el criterio en lugar de confiar en el valor por defecto, fijando \texttt{dropna=False} en las herramientas basadas en pandas.
+
+\subsection{Indicadores de Valor Generados}
+
+A partir del procesamiento distribuido se extrajeron los siguientes indicadores sobre el comportamiento de la comunidad de Steam en la muestra analizada:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Tasa global de recomendación: 84.43\,\%.} De 315,809 reseñas limpias, 266,640 son positivas. Este valor constituye la línea base contra la cual debe evaluarse cualquier título individual dentro de la muestra.
+    \item \textbf{Defecto de muestreo detectado y cuantificado: 36.8\,\% del archivo.} Uno de cada tres registros del archivo de trabajo es copia exacta de otro (Sección~\ref{subsec:muestreo}). El valor del hallazgo no es el dato en sí, sino que la fase de limpieza lo detectó de forma autónoma: cualquier tablero construido sobre el dato crudo habría sobreestimado el volumen de opiniones en más de un tercio sin emitir ninguna señal de error.
+    \item \textbf{Concentración del catálogo: 2.6\,\%.} Solo 609 de 22,992 videojuegos alcanzan las 100 reseñas. El catálogo es de cola larga extrema, y las métricas porcentuales requieren umbrales de volumen para ser interpretables.
+    \item \textbf{Ranking de fidelización.} \textit{Left 4 Dead 2} (821 reseñas, 100\,\% positivas) y \textit{Subnautica} (807, 100\,\%) encabezan el ranking de títulos con respaldo estadístico suficiente.
+    \item \textbf{Límite estructural de la variable de texto: 8,000 caracteres.} Detectado empíricamente en la Consulta~9; condiciona cualquier análisis futuro de extensión o de procesamiento de lenguaje natural sobre este campo.
+\end{enumerate}

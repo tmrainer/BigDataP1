@@ -1,0 +1,24 @@
+% ============================ INTRODUCCIÓN ===========================
+\section{Introducción}
+
+El presente proyecto tiene como objetivo demostrar la capacidad de gestionar grandes volúmenes de información mediante el procesamiento distribuido en la nube, utilizando los servicios de Google Cloud Platform (GCP). A través de herramientas como Polars, Dask, Modin, Apache Spark y Hadoop MapReduce, se busca procesar eficientemente un dataset masivo y generar indicadores de valor para la toma de decisiones.
+
+El caso de estudio corresponde al dominio del comercio digital de videojuegos: se analizan 500,000 reseñas publicadas por usuarios en la plataforma Steam, con el fin de extraer métricas de satisfacción, fidelización y comportamiento de la comunidad por título. Este contexto es directamente asimilable a un escenario real de negocio de \textit{retail} digital, donde la opinión del cliente constituye un activo para decisiones de catálogo, precios y soporte.
+
+El trabajo se estructura en cinco ejes, alineados con los requerimientos del proyecto:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Fuente de datos:} descripción del origen, estructura y variables principales del conjunto de reseñas, así como el procedimiento de muestreo aplicado sobre el dataset original de más de 113 millones de registros.
+    \item \textbf{Almacenamiento en la nube:} implementación de un \textit{Data Lake} sobre Google Cloud Storage, con evidencia de creación, organización de los datos y justificación de la decisión arquitectónica.
+    \item \textbf{Diseño de arquitectura:} definición de dos topologías de clúster Dataproc (1 Master + 2 Workers y 1 Master + 4 Workers), con diagramas, explicación de componentes y justificación técnica.
+    \item \textbf{Procesamiento distribuido:} implementación de 10 consultas equivalentes en Polars, Dask, Modin y Apache Spark, cubriendo limpieza, tratamiento de duplicados y nulos, transformación de variables, filtrado, agrupaciones, agregaciones, ordenamiento y cálculo de métricas, con medición sistemática de tiempos de ejecución.
+    \item \textbf{Hadoop MapReduce:} ejecución de tres programas del archivo \texttt{hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar} (\texttt{wordmean}, \texttt{secondarysort} y \texttt{terasort}) sobre un clúster Dataproc, utilizando HDFS como sistema de archivos distribuido para la entrada y la salida.
+\end{enumerate}
+
+Un aporte diferencial de este informe es que no se limita a reportar resultados favorables. Tres hallazgos contraintuitivos se investigaron hasta su causa y se documentan con evidencia cuantitativa:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Duplicar el número de nodos \textit{worker} no redujo los tiempos de ejecución} en ninguna de las cuatro herramientas. Se realizó un diagnóstico empírico sobre el clúster y sobre los \textit{event logs} de Spark para identificar y comprobar las causas reales (Sección~\ref{subsec:diagnostico-spark}).
+    \item \textbf{El 36.8\,\% de las filas del archivo de trabajo resultaron ser copias exactas de otras filas.} La fase de limpieza del flujo distribuido lo detectó; el análisis posterior identificó su origen en el parámetro de muestreo empleado y lo verificó con un modelo probabilístico (Sección~\ref{subsec:muestreo}).
+    \item \textbf{Dos ejecuciones de MapReduce terminaron con estado \texttt{completed successfully} produciendo resultados inválidos} (\texttt{NaN} e \texttt{Infinity}). El diagnóstico mediante los contadores del \textit{job} reveló, en un caso, un archivo de entrada vacío y, en el otro, una limitación del propio programa de ejemplo frente a múltiples \textit{reducers} (Sección~\ref{subsubsec:wordmean-fallos}).
+\end{itemize}

@@ -1,0 +1,147 @@
+% ============================== DATASET ==============================
+\section{Dataset}
+
+\subsection{Origen y Estructura}
+El conjunto de datos original, denominado \textit{100 Million+ Steam Reviews}, fue obtenido desde la plataforma Kaggle y recopilado mediante la API oficial de reseñas de usuarios de la plataforma (\textit{Steam User Reviews - Get List API}). En su versión íntegra, el dataset abarca más de 113 millones de registros históricos que capturan la interacción y opinión de los jugadores. La fuente oficial y documentación completa se encuentra disponible en: \url{https://www.kaggle.com/datasets/kieranpoc/steam-reviews/data}.
+
+El archivo de trabajo posee un formato estructurado (CSV) y consta de 24 variables. Agrupadas por rol dentro del modelo de datos, estas son:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Identificadores:} \texttt{recommendationid} (ID único de la reseña), \texttt{appid} (ID del juego) y \texttt{game} (nombre del videojuego).
+    \item \textbf{Perfil del jugador:} \texttt{author\_steamid} (identificador único del usuario), cantidad de juegos en su biblioteca (\texttt{author\_\bk{}num\_\bk{}games\_\bk{}owned}) y total de reseñas publicadas (\texttt{author\_num\_reviews}).
+    \item \textbf{Métricas de actividad (en minutos):} tiempo de juego total histórico (\texttt{author\_\bk{}playtime\_\bk{}forever}), tiempo jugado en las últimas dos semanas (\texttt{author\_\bk{}playtime\_\bk{}last\_\bk{}two\_\bk{}weeks}), tiempo registrado al momento de escribir la reseña (\texttt{author\_\bk{}playtime\_\bk{}at\_\bk{}review}) y fecha de la última sesión (\texttt{author\_last\_played}).
+    \item \textbf{Contenido e impacto de la reseña:} idioma (\texttt{language}), texto (\texttt{review}), fechas de publicación y actualización, veredicto de recomendación (\texttt{voted\_up}) y reacción de la comunidad (\texttt{votes\_up}, \texttt{votes\_funny}, \texttt{weighted\_vote\_score}, \texttt{comment\_count}).
+    \item \textbf{Contexto de adquisición:} indicadores binarios que señalan si el juego fue comprado directamente en la tienda de Steam (\texttt{steam\_purchase}), si fue adquirido de forma gratuita (\texttt{received\_for\_free}) o si la reseña fue escrita durante la fase de acceso anticipado (\texttt{written\_\bk{}during\_\bk{}early\_\bk{}access}), además de las banderas de disponibilidad regional \texttt{hidden\_\bk{}in\_\bk{}steam\_\bk{}china} y \texttt{steam\_\bk{}china\_\bk{}location}.
+\end{itemize}
+
+El esquema inferido automáticamente por Polars sobre el archivo de trabajo se resume en la Tabla~\ref{tab:esquema}.
+
+\begin{table}[H]
+\centering
+\caption{Esquema del dataset de trabajo (24 columnas, 500,000 registros)}
+\label{tab:esquema}
+\vspace{0.2cm}
+\small
+\begin{tabular}{llp{7.2cm}}
+\toprule
+\textbf{Variable} & \textbf{Tipo} & \textbf{Descripción} \\
+\midrule
+\texttt{recommendationid}             & Int64   & Identificador único de la reseña \\
+\texttt{appid}                        & Int64   & Identificador del videojuego en Steam \\
+\texttt{game}                         & String  & Nombre comercial del videojuego \\
+\texttt{author\_steamid}              & Int64   & Identificador único del autor \\
+\texttt{author\_\bk{}num\_\bk{}games\_\bk{}owned}    & Int64   & Juegos en la biblioteca del autor \\
+\texttt{author\_num\_reviews}         & Int64   & Reseñas publicadas por el autor \\
+\texttt{author\_\bk{}playtime\_\bk{}forever}    & Int64   & Minutos jugados históricos \\
+\texttt{author\_\bk{}playtime\_\bk{}last\_\bk{}two\_\bk{}weeks} & Int64 & Minutos jugados en las últimas 2 semanas \\
+\texttt{author\_\bk{}playtime\_\bk{}at\_\bk{}review}  & Int64  & Minutos jugados al escribir la reseña \\
+\texttt{author\_last\_played}          & Int64  & \textit{Timestamp} de la última sesión \\
+\texttt{language}                      & String & Idioma de la reseña \\
+\texttt{review}                        & String & Texto libre de la reseña \\
+\texttt{timestamp\_created}            & Int64  & \textit{Timestamp} de publicación \\
+\texttt{timestamp\_updated}            & Int64  & \textit{Timestamp} de última edición \\
+\texttt{voted\_up}                     & Int64  & 1 = recomienda, 0 = no recomienda \\
+\texttt{votes\_up}                     & Int64  & Votos de \guillemotleft{}útil\guillemotright{} recibidos \\
+\texttt{votes\_funny}                  & Int64  & Votos de \guillemotleft{}graciosa\guillemotright{} recibidos \\
+\texttt{weighted\_vote\_score}         & Float64& Puntaje de utilidad ponderado por Steam \\
+\texttt{comment\_count}                & Int64  & Comentarios sobre la reseña \\
+\texttt{steam\_purchase}               & Int64  & 1 si el juego se compró en Steam \\
+\texttt{received\_for\_free}           & Int64  & 1 si el juego se obtuvo gratis \\
+\texttt{written\_\bk{}during\_\bk{}early\_\bk{}access}& Int64  & 1 si se escribió en acceso anticipado \\
+\texttt{hidden\_\bk{}in\_\bk{}steam\_\bk{}china}      & Int64  & Bandera de visibilidad regional \\
+\texttt{steam\_\bk{}china\_\bk{}location}        & String & Ubicación declarada (Steam China) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Selección y Preprocesamiento de Registros}
+\label{subsec:muestreo}
+
+\subsubsection{Procedimiento aplicado}
+
+El dataset publicado en Kaggle supera los 113 millones de registros y varias decenas de gigabytes, un volumen que excede tanto el requerimiento del proyecto (mínimo 500,000 registros) como el presupuesto de cómputo asignado. Para acotar el experimento se construyó el archivo de trabajo con el siguiente procedimiento, ejecutado en Google Colab:
+
+\begin{table}[H]
+\centering
+\caption{Parámetros del procedimiento de muestreo aplicado}
+\label{tab:muestreo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Parámetro} & \textbf{Valor empleado} \\
+\midrule
+Origen                     & Dataset \texttt{kieranpoc/\bk{}steam-\bk{}reviews} descargado con \texttt{kagglehub} \\
+Archivo leído              & El primero que devuelve el listado del directorio \\
+Tamaño de la muestra       & 500,000 registros \\
+Tipo de muestreo           & Aleatorio \textbf{con reposición} \\
+Semilla                    & 42 (reproducible) \\
+Destino                    & \texttt{steam\_\bk{}reviews\_\bk{}500k.\bk{}csv} en Google Drive \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El archivo resultante cumple el requisito del enunciado: \textbf{500,000 registros} y 24 columnas, con un peso en disco de \textbf{700.1 MB} (667.7 MiB). Dos decisiones de ese script, sin embargo, condicionan la interpretación de los resultados y se documentan aquí de forma explícita, ya que explican por sí solas el principal hallazgo de la fase de limpieza.
+
+\subsubsection{Caracterización empírica de la muestra}
+
+Sobre el archivo final se midieron directamente las siguientes cantidades:
+
+\begin{table}[H]
+\centering
+\caption{Estructura de unicidad del archivo de trabajo (medición directa sobre el CSV)}
+\label{tab:unicidad}
+\vspace{0.2cm}
+\small
+\begin{tabular}{lr}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Filas del archivo                                      & 500,000 \\
+Valores distintos de \texttt{recommendationid}         & 315,031 \\
+Combinaciones distintas de (\texttt{author\_steamid}, \texttt{appid}, \texttt{review}) & 315,809 \\
+Filas completas distintas                              & 315,809 \\
+\midrule
+Filas que son copia exacta de otra fila                & \textbf{184,191} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El \textbf{36.8\,\%} de las filas del archivo son copias exactas de otra fila. Esta cifra no es una propiedad del dataset de origen, sino una consecuencia directa y cuantificable del muestreo con reposición.
+
+\paragraph{Verificación del origen de los duplicados.} Al extraer $n$ elementos \textit{con reposición} de un conjunto de tamaño $N$, el número esperado de elementos distintos obtenidos es
+\[
+\mathbb{E}[\text{distintos}] \;=\; N\left[1-\left(1-\tfrac{1}{N}\right)^{n}\right].
+\]
+Con $n = 500{,}000$ y los 315,809 valores distintos observados, el tamaño implícito del conjunto de origen es $N \approx 496{,}000$ filas. La coincidencia es estrecha: para $N = 500{,}000$ la fórmula predice 316,060 filas distintas, frente a las 315,809 medidas, una desviación del 0.08\,\%.
+
+La conclusión es doble y se verifica sin ambigüedad:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{El muestreo se realizó con reposición.} Si hubiera sido sin reposición, las 500,000 filas serían necesariamente distintas y no existirían duplicados exactos.
+    \item \textbf{El conjunto de origen no fueron los 113 millones de registros, sino un archivo de aproximadamente 496,000 filas.} El script selecciona el primer archivo que devuelve el listado del directorio, cuyo orden depende del sistema de archivos y no del contenido; el archivo así elegido resultó ser una fracción del dataset, no su totalidad. Si el conjunto de origen hubiese tenido 113 millones de filas, el muestreo con reposición habría producido apenas unos 1,105 duplicados esperados, tres órdenes de magnitud por debajo de los 184,191 observados.
+\end{enumerate}
+
+\paragraph{Implicaciones para la validez del análisis.} Esta caracterización no invalida los resultados del proyecto, pero delimita con precisión qué se puede afirmar a partir de ellos:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Los indicadores calculados son válidos sobre el conjunto deduplicado.} Toda métrica del informe (tasa de recomendación, rankings, promedios) se calcula \textit{después} de la Consulta~2, es decir, sobre las 315,809 filas únicas. Esas filas son un subconjunto aleatorio del conjunto de origen, obtenido sin sesgo sistemático, por lo que las proporciones estimadas sobre ellas son estimadores insesgados de las proporciones de dicho conjunto.
+    \item \textbf{La extrapolación al universo completo de Steam no está respaldada.} Como el conjunto de origen es un archivo cuya posición dentro del dataset de 113 millones no quedó documentada por el script, no puede afirmarse que sea una muestra aleatoria de la población total. Los indicadores deben leerse como propiedades de la muestra analizada, no de la plataforma completa.
+    \item \textbf{La cobertura de la muestra es amplia.} Tras la limpieza se contabilizan \textbf{22,992} videojuegos distintos y reseñas en inglés, español, ruso, turco y chino simplificado, entre otros idiomas. Esto descarta que el archivo de origen corresponda a un único título, a un único idioma o a una ventana temporal estrecha, y sustenta la diversidad interna del análisis.
+    \item \textbf{Los 778 registros con \texttt{recommendationid} repetido pero contenido distinto} (la diferencia entre 315,809 y 315,031) sí corresponden a un fenómeno real del origen: reediciones de una misma reseña capturadas por la API en momentos distintos.
+\end{itemize}
+
+\paragraph{Valor metodológico del hallazgo.} La detección de estos duplicados no fue un supuesto de partida, sino el resultado de la propia fase de limpieza del procesamiento distribuido: la Consulta~2 los identificó y eliminó sobre las cuatro herramientas evaluadas, con resultados idénticos entre ellas (Sección~\ref{sec:operaciones}). Este es precisamente el propósito de una etapa de validación de calidad en un flujo de Big Data, que es detectar defectos que el análisis posterior arrastraría en silencio, y constituye, en sí mismo, el indicador de calidad de datos más relevante del proyecto.
+
+\paragraph{Corrección recomendada para trabajos futuros.} Dos cambios en el procedimiento eliminarían ambos problemas de una vez:
+
+\begin{enumerate}[leftmargin=*]
+    \item Leer la \textbf{totalidad} del dataset descargado, concatenando todos sus archivos, en lugar de únicamente el primero del listado.
+    \item Muestrear \textbf{sin reposición}, de modo que las 500,000 filas resultantes sean necesariamente distintas.
+\end{enumerate}
+
+Con esos cambios, las 500,000 filas serían únicas desde el origen y la Consulta~2 reportaría 0 duplicados eliminados, confirmando la limpieza en lugar de corregir un artefacto del muestreo. El script utilizado y su versión corregida se entregan en el paquete de código fuente.
+
+\subsubsection{Nota sobre la carga al Data Lake}
+
+El archivo se cargó al \textit{Data Lake} en su forma cruda, sin preprocesamiento previo, de manera deliberada: toda la limpieza forma parte del procesamiento distribuido evaluado y, por tanto, del alcance medido de este proyecto. Es gracias a esa decisión que el defecto de muestreo quedó documentado con evidencia cuantitativa en lugar de pasar inadvertido.

@@ -1,0 +1,460 @@
+% ============================== HADOOP ===============================
+\section{Hadoop MapReduce en Google Cloud Dataproc}
+\label{sec:hadoop}
+
+Esta sección documenta la ejecución de tres programas del archivo \texttt{hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar} sobre un clúster administrado de Google Cloud Dataproc, utilizando HDFS como sistema de archivos distribuido tanto para la entrada como para la salida. Conforme al enunciado, se excluyeron los programas \texttt{wordcount} y \texttt{grep}. Los programas seleccionados fueron \texttt{wordmean}, \texttt{secondarysort} y \texttt{terasort}, elegidos por cubrir tres perfiles de carga distintos: cálculo estadístico sobre texto, control del comportamiento interno del framework, y \textit{benchmark} de ordenamiento distribuido a escala.
+
+\subsection{Entorno de Ejecución}
+
+Esta fase se ejecutó sobre un clúster independiente del utilizado en las Secciones~\ref{sec:operaciones} y~\ref{sec:rendimiento}, provisionado específicamente para la práctica de MapReduce.
+
+\begin{table}[H]
+\centering
+\caption{Configuración del clúster utilizado para Hadoop MapReduce}
+\label{tab:hadoop-cluster}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Componente} & \textbf{Configuración} \\
+\midrule
+Servicio                & Google Cloud Dataproc \\
+Proyecto                & \texttt{eco-\bk{}tenure-\bk{}506905-\bk{}q7} \\
+Clúster                 & \texttt{cluster-bigdata-v2} \\
+Región                  & \texttt{us-east4} (\textit{auto zone placement}) \\
+Imagen                  & \texttt{2.3-debian12} \\
+Versión de Hadoop       & Apache Hadoop \textbf{3.3.6} \\
+Nodo maestro            & 1 $\times$ \texttt{n2-highmem-4}, disco 50 GB \\
+Workers                 & 2 $\times$ \texttt{n2-standard-4}, disco 50 GB \\
+Componentes opcionales  & JupyterLab + Component Gateway \\
+Bucket de \textit{staging} & \texttt{bigdata-2026-02} \\
+JAR utilizado           & \texttt{/\bk{}usr/\bk{}lib/\bk{}hadoop-\bk{}mapreduce/\bk{}hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Sobre el JAR de ejemplos.} El archivo \texttt{hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar} viene preinstalado en cada nodo del clúster como parte de la distribución de Hadoop; no fue necesario descargarlo de Maven Central ni subirlo manualmente. Al inspeccionarlo se comprobó que se trata de un enlace simbólico:
+
+\begin{lstlisting}[style=sh]
+lrwxrwxrwx 1 root root 35 Aug 30 07:20
+/usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar
+    -> hadoop-mapreduce-examples-3.3.6.jar
+\end{lstlisting}
+
+Esa indirección es la que permite confirmar la versión exacta de Hadoop del clúster. Ejecutar el JAR sin argumentos lista los programas disponibles, de donde se seleccionaron los tres de esta práctica.
+
+\paragraph{Acceso al clúster.} Todos los comandos se ejecutaron en el nodo maestro (\texttt{cluster-\bk{}bigdata-\bk{}v2-\bk{}m}) a través de la terminal de JupyterLab, habilitada gracias a \texttt{-\bk{}-\bk{}optional-\bk{}components=\bk{}JUPYTER} y \texttt{-\bk{}-\bk{}enable-\bk{}component-\bk{}gateway}. Es funcionalmente equivalente a conectarse con \texttt{gcloud compute ssh}, con la diferencia de que la sesión corre como usuario \texttt{root}. Por ese motivo se optó por rutas fijas en HDFS (\texttt{/tarea/...}) en lugar de \texttt{/user/\$(whoami)/...}, evitando inconsistencias entre sesiones.
+
+\begin{lstlisting}[style=sh, caption={Creación del clúster}]
+gcloud dataproc clusters create cluster-bigdata-v2 \
+    --region=us-east4 \
+    --subnet=default \
+    --master-machine-type=n2-highmem-4 \
+    --master-boot-disk-size=50GB \
+    --num-workers=2 \
+    --worker-machine-type=n2-standard-4 \
+    --worker-boot-disk-size=50GB \
+    --image-version=2.3-debian12 \
+    --optional-components=JUPYTER \
+    --enable-component-gateway \
+    --bucket=bigdata-2026-02
+\end{lstlisting}
+
+\captura{hadoop/00_entorno/03_jar_symlink_hadoop_336.png}{Verificación del JAR de ejemplos: el enlace simbólico revela la versión Apache Hadoop 3.3.6 del clúster.}
+
+\captura{hadoop/00_entorno/04_lista_programas_disponibles.png}{Listado de los programas incluidos en \texttt{hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar}, de donde se seleccionaron los tres de esta práctica.}
+
+\begin{table}[H]
+\centering
+\caption{Resumen de los tres programas MapReduce ejecutados}
+\label{tab:hadoop-resumen}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+\textbf{Programa} & \textbf{Dataset de entrada} & \textbf{Volumen} & \textbf{Mappers} & \textbf{Reducers} \\
+\midrule
+\texttt{wordmean}      & Don Quijote (Project Gutenberg) & 2.1 MB    & 1  & 1 \\
+\texttt{secondarysort} & MovieLens 100K (GroupLens)      & 779 KB    & 1  & 1 \\
+\texttt{teragen}       & Generado sintéticamente         & 100 MB    & 21 & 0 \\
+\texttt{terasort}      & Salida de \texttt{teragen}      & 100 MB    & 21 & 7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\subsection{Programa 1: \texttt{wordmean}}
+
+\paragraph{Objetivo.} Calcular la longitud promedio de las palabras de un conjunto de archivos de texto. En la fase \textit{Map}, cada palabra emite dos pares clave-valor: uno con la clave \texttt{count} (valor 1) y otro con la clave \texttt{length} (valor igual al número de caracteres de la palabra). En la fase \textit{Reduce} se suman ambos acumuladores. Finalmente el propio programa lee el archivo de salida y divide \texttt{length}/\texttt{count} para imprimir la media en consola. Comparte la estructura de \texttt{wordcount} (tokenización de texto) pero produce un resultado estadístico en lugar de un simple conteo.
+
+\paragraph{Dataset de entrada y justificación.} Se utilizó \textbf{\guillemotleft{}Don Quijote de la Mancha\guillemotright{}} (Project Gutenberg, eBook \#2000), en texto plano UTF-8. La primera opción fueron los archivos \texttt{LICENSE.txt} y \texttt{NOTICE.txt} que vienen con cualquier instalación de Hadoop, pero se descartaron por ser textos legales, de tamaño pequeño y poco representativos como conjunto de datos en un contexto de Big Data. El Quijote se eligió por tres razones: es obra de \textbf{dominio público}, citable sin restricciones de licencia; está disponible en \textbf{UTF-8}, exactamente el formato que espera \texttt{TextInputFormat} de Hadoop, de modo que las tildes y la \guillemotleft{}ñ\guillemotright{} se procesan sin configuración adicional; y es texto natural real, con gran variedad léxica, por lo que la media calculada tiene una interpretación lingüística genuina. Se recortaron la cabecera y el pie legal que Project Gutenberg añade a todos sus archivos, para que la estadística refleje únicamente el texto de la novela.
+
+\bloque{Comando ejecutado.}
+\begin{lstlisting}[style=sh]
+JAR=/usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar
+
+# 1. Descarga y limpieza del texto
+wget -O ~/datos/quijote.txt https://www.gutenberg.org/ebooks/2000.txt.utf-8
+sed -n '/START OF THE PROJECT GUTENBERG/,/END OF THE PROJECT GUTENBERG/p' \
+    ~/datos/quijote.txt > ~/datos/quijote_limpio.txt
+wc -l ~/datos/quijote_limpio.txt          # verificacion: ~37,683 lineas
+
+# 2. Carga en HDFS
+hdfs dfs -mkdir -p /tarea/wordmean/input
+hdfs dfs -put -f ~/datos/quijote_limpio.txt /tarea/wordmean/input/
+
+# 3. Ejecucion del job (ver 7.3.1 sobre -D mapreduce.job.reduces=1)
+hdfs dfs -rm -r -f -skipTrash /tarea/wordmean/output
+hadoop jar ${JAR} wordmean \
+    -D mapreduce.job.reduces=1 \
+    /tarea/wordmean/input \
+    /tarea/wordmean/output
+\end{lstlisting}
+
+\captura{hadoop/01_wordmean/01_descarga_quijote_y_carga_hdfs.png}{Descarga del texto, limpieza de las marcas de Project Gutenberg y carga en HDFS.}
+
+\subsubsection{Depuración: dos fallos previos al resultado correcto}
+\label{subsubsec:wordmean-fallos}
+
+Este programa requirió \textbf{tres ejecuciones}. Los dos fallos intermedios resultaron ser los hallazgos más instructivos de toda la práctica, porque ambos terminaron con el job en estado \texttt{completed successfully} y aun así produjeron un resultado inválido.
+
+\paragraph{Intento 1: \texttt{The mean is: NaN}.} El \texttt{sed} usado para recortar la cabecera legal empleaba el patrón \texttt{'\textbackslash*\textbackslash*\textbackslash* START OF THE PROJECT GUTENBERG'}. Los asteriscos escapados no coincidieron con el texto real del archivo, de modo que \texttt{sed} no copió ninguna línea y generó un archivo \textbf{vacío (0 bytes)} que se subió igualmente a HDFS. El diagnóstico estuvo en los contadores del job:
+
+\begin{lstlisting}[style=sh]
+Map input records=0
+Map output records=0
+Bytes Read=0
+\end{lstlisting}
+
+\texttt{NaN} (\textit{Not a Number}) es el resultado de $0/0$: no había ni palabras ni caracteres que promediar. La corrección consistió en localizar las marcas reales con \texttt{grep -\bk{}n "PROJECT GUTENBERG EBOOK"} (líneas 27 y 37,709) y simplificar el patrón quitando los asteriscos.
+
+\captura{hadoop/01_wordmean/03_resultado_nan.png}{Intento 1: el job termina correctamente pero devuelve \texttt{NaN}.}
+
+\captura{hadoop/01_wordmean/04_diagnostico_archivo_vacio.png}{Diagnóstico: los contadores \texttt{Map input records=0} y \texttt{Bytes Read=0} revelan que el archivo de entrada estaba vacío.}
+
+\paragraph{Intento 2: \texttt{The mean is: Infinity}.} Con el archivo ya correcto, los contadores confirmaron la lectura completa del libro (\texttt{Map input records=\bk{}37683}, \texttt{Map output records=\bk{}773268}), pero el resultado seguía siendo inválido. A diferencia de \texttt{NaN}, \texttt{Infinity} corresponde a una división $\text{número}/0$: \texttt{length} tenía un valor real, pero \texttt{count} se leyó como cero. La causa estaba en esta línea de los contadores:
+
+\begin{lstlisting}[style=sh]
+Launched reduce tasks=7
+\end{lstlisting}
+
+El clúster asigna automáticamente varios \textit{reducers} según su tamaño. \texttt{wordmean} genera exactamente \textbf{dos claves} (\texttt{count} y \texttt{length}), que se repartieron entre archivos de salida distintos (\texttt{part-r-00000}, \texttt{part-r-00001}, \dots) según su \textit{hash}. El código de \texttt{WordMean} tiene \textbf{codificado leer únicamente \texttt{part-r-00000}}: encontró solo una de las dos claves y asumió que la otra valía 0. Es una limitación conocida del ejemplo, escrito asumiendo un único \textit{reducer}. La solución fue forzarlo explícitamente con \texttt{-\bk{}D mapreduce.\bk{}job.\bk{}reduces=\bk{}1}.
+
+\captura{hadoop/01_wordmean/06_resultado_infinity.png}{Intento 2: con 7 \textit{reducers}, las dos claves quedan en archivos distintos y el resultado es \texttt{Infinity}.}
+
+\paragraph{Intento 3: correcto.}
+
+\captura{hadoop/01_wordmean/08_resultado_final_media.png}{Intento 3: con un único \textit{reducer}, \texttt{Reduce output records=\bk{}2} y la media se calcula correctamente.}
+
+\subsubsection{Análisis de resultados}
+
+\begin{table}[H]
+\centering
+\caption{Contadores y resultado de \texttt{wordmean}}
+\label{tab:wordmean}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Líneas procesadas (\texttt{Map input records})   & 37,683 \\
+Palabras procesadas (\texttt{Map output records})& 773,268 \\
+Bytes leídos (\texttt{Bytes Read})               & 2,206,115 \\
+Total de caracteres (\texttt{length} en HDFS)    & 3,436,884 \\
+Total de palabras (\texttt{count} en HDFS)       & 773,268 \\
+Mappers / Reducers                               & 1 / 1 \\
+\midrule
+\textbf{Longitud media de palabra}               & \textbf{4.4446 caracteres} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\bloque{Exploración de los resultados en HDFS.}
+\begin{lstlisting}[style=sh]
+$ hdfs dfs -cat /tarea/wordmean/output/part-r-00000
+count     773268
+length    3436884
+\end{lstlisting}
+
+El contenido crudo almacenado en HDFS permite verificar el cálculo a mano: $3{,}436{,}884 \div 773{,}268 = 4.4446$, que coincide con el valor \texttt{4.444622045655581} impreso en consola.
+
+\paragraph{Interpretación.} Una longitud media de $\sim$4.44 caracteres por palabra es coherente para el español literario, donde el vocabulario está dominado por palabras funcionales cortas (artículos, preposiciones, conjunciones) que arrastran la media hacia abajo pese a la presencia de términos largos.
+
+\paragraph{Observación sobre el paralelismo.} El archivo pesa 2.1 MB, muy por debajo del tamaño de bloque por defecto de HDFS (128 MB). Por eso Hadoop generó un único \textit{input split} y, en consecuencia, \textbf{un solo mapper}. El resultado es correcto, pero este job no aprovechó el paralelismo del clúster: el volumen de datos es demasiado pequeño. El contraste con \texttt{terasort}, donde 100 MB generaron 21 mappers, es directo.
+
+\paragraph{Detalle adicional.} En los primeros intentos aparecía \texttt{Killed reduce tasks=\bk{}1} junto a \texttt{Launched reduce tasks=\bk{}7}. No es un error, sino la \textbf{ejecución especulativa} de Hadoop: cuando una tarea va más lenta de lo esperado, YARN lanza una copia redundante en otro nodo y descarta la que termina segunda.
+
+% =====================================================================
+\subsection{Programa 2: \texttt{secondarysort}}
+
+\paragraph{Objetivo.} Demostrar el patrón de \textbf{ordenamiento secundario}. MapReduce garantiza por defecto que las claves lleguen ordenadas al \textit{reducer}, pero \textbf{no} ordena los valores dentro de cada grupo. Este ejemplo resuelve ese problema combinando tres piezas: una \textbf{clave compuesta} (\texttt{IntPair}) que contiene los dos enteros; un \textbf{particionador personalizado} (\texttt{FirstPartitioner}) que envía al mismo \textit{reducer} todos los registros con el mismo primer valor; y un \textbf{comparador de agrupamiento} (\texttt{FirstGroupingComparator}) que hace que el \textit{reducer} trate como un solo grupo los registros que comparten la primera clave, recibiendo los segundos valores ya ordenados. Es el más didáctico de los tres: no calcula una estadística ni mide rendimiento, sino que ilustra cómo se controla el comportamiento interno del framework.
+
+\paragraph{Dataset de entrada y justificación.} El programa exige un formato muy concreto: \textbf{dos números enteros por línea}, separados por espacio o tabulación. La opción inmediata habría sido escribir a mano un archivo de ocho líneas, pero eso constituye un dato sintético e irrelevante como evidencia de Big Data. Se buscó en cambio un dataset \textbf{real} que tuviera de forma natural ese patrón de dos columnas numéricas, y se eligió \textbf{MovieLens 100K} (GroupLens Research, University of Minnesota) por ser público, real y ampliamente citado en la literatura de sistemas de recomendación; por su volumen razonable de \textbf{100,000 registros}, cuatro órdenes de magnitud por encima de un archivo escrito a mano; porque su archivo \texttt{u.data} viene con el formato \texttt{id\_usuario} / \texttt{id\_pelicula} / \texttt{calificación} / \texttt{timestamp}, de modo que quedarse con las dos primeras columnas mediante \texttt{awk} produce exactamente el par de enteros requerido \textbf{sin alterar ni inventar datos}; y porque el resultado tiene una interpretación real: para cada usuario, el catálogo ordenado de las películas que calificó.
+
+\bloque{Comando ejecutado.}
+\begin{lstlisting}[style=sh]
+JAR=/usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar
+
+# 1. Descarga y preparacion del dataset
+wget -O ml-100k.zip https://files.grouplens.org/datasets/movielens/ml-100k.zip
+unzip -o ml-100k.zip
+awk '{print $1, $2}' ~/datos/ml-100k/u.data > ~/datos/secondarysort_input.txt
+wc -l ~/datos/secondarysort_input.txt     # verificacion: 100000 lineas
+
+# 2. Carga en HDFS
+hdfs dfs -mkdir -p /tarea/secondarysort/input
+hdfs dfs -put -f ~/datos/secondarysort_input.txt /tarea/secondarysort/input/
+
+# 3. Ejecucion del job
+hdfs dfs -rm -r -f -skipTrash /tarea/secondarysort/output
+hadoop jar ${JAR} secondarysort \
+    -D mapreduce.job.reduces=1 \
+    /tarea/secondarysort/input \
+    /tarea/secondarysort/output
+\end{lstlisting}
+
+\captura{hadoop/02_secondarysort/01_descarga_movielens_y_preparacion.png}{Descarga de MovieLens 100K y extracción de las dos columnas de enteros con \texttt{awk}.}
+
+\subsubsection{Análisis de resultados}
+
+\begin{table}[H]
+\centering
+\caption{Contadores y resultado de \texttt{secondarysort}}
+\label{tab:secondarysort}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Registros de entrada (\texttt{Map input records})  & 100,000 \\
+Registros emitidos por Map                         & 100,000 \\
+\textbf{Grupos formados} (\texttt{Reduce input groups}) & \textbf{943} \\
+Registros de salida (\texttt{Reduce output records})& 100,943 \\
+Tamaño de entrada en HDFS (\texttt{Bytes Read})    & 779,173 \\
+Mappers / Reducers                                 & 1 / 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los \textbf{943 grupos} coinciden exactamente con el número de usuarios del dataset MovieLens 100K, lo que confirma que el agrupamiento por clave primaria funcionó correctamente. Se verificó de forma independiente contando los separadores del archivo de salida:
+
+\bloque{Exploración de los resultados en HDFS.}
+\begin{lstlisting}[style=sh]
+$ hdfs dfs -cat /tarea/secondarysort/output/part-r-00000 | grep -c "^-----"
+943
+\end{lstlisting}
+
+La diferencia entre los 100,000 registros de entrada y los 100,943 de salida corresponde justamente a las 943 líneas separadoras que el \textit{reducer} escribe al inicio de cada grupo.
+
+\captura{hadoop/02_secondarysort/03_counters_y_salida.png}{Contadores del job (\texttt{Reduce input groups=\bk{}943}) y primeras líneas de la salida agrupada.}
+
+\paragraph{Evidencia del ordenamiento secundario.} La prueba más clara es comparar un mismo usuario antes y después del procesamiento:
+
+\begin{table}[H]
+\centering
+\caption{Usuario 196: películas calificadas, antes y después del \textit{secondary sort}}
+\label{tab:usuario196}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+\textbf{Estado} & \textbf{IDs de película (primeros 10)} \\
+\midrule
+Entrada (desordenada) & 242, 393, 381, 251, 655, 67, 306, 238, 663, 111 \\
+Salida (ordenada)     & 8, 13, 25, 66, 67, 70, 94, 108, 110, 111 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los datos son los mismos, pero MapReduce los ha reorganizado: agrupados por usuario (clave primaria) y, dentro de cada grupo, ordenados ascendentemente por ID de película (clave secundaria). Ese reordenamiento \textbf{no lo realiza el código del usuario}, sino el framework, gracias al particionador y al comparador personalizados.
+
+\captura{hadoop/02_secondarysort/04_comparacion_usuario_196.png}{Comparación directa entrada/salida para el usuario 196: evidencia del ordenamiento secundario.}
+
+\paragraph{Nota sobre la configuración.} Aquí también se usó \texttt{-\bk{}D mapreduce.\bk{}job.\bk{}reduces=\bk{}1}, pero por un motivo distinto al de \texttt{wordmean}. Con varios \textit{reducers} el resultado habría sido igualmente correcto, ya que cada usuario entero cae en un único \textit{reducer} y ningún grupo se parte; lo único que ocurre es que la salida se reparte en siete archivos \texttt{part-r-*}, lo que complica explorarla y documentarla. Fue una decisión de conveniencia, no la corrección de un error.
+
+% =====================================================================
+\subsection{Programa 3: \texttt{terasort}}
+
+\paragraph{Objetivo.} \texttt{terasort} es el \textbf{benchmark estándar de la industria} para medir el rendimiento del ordenamiento distribuido en clústeres Hadoop; es la prueba usada en las competiciones \textit{Sort Benchmark}. Se ejecuta en tres fases encadenadas, donde la salida de cada una es la entrada de la siguiente:
+
+\begin{table}[H]
+\centering
+\caption{Fases del \textit{benchmark} TeraSort}
+\label{tab:terasort-fases}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lp{4.1cm}ll@{}}
+\toprule
+\textbf{Fase} & \textbf{Función} & \textbf{Entrada} & \textbf{Salida} \\
+\midrule
+\texttt{teragen}      & Genera registros de 100 bytes & N.\textsuperscript{o} de registros & \texttt{/\bk{}tarea/\bk{}terasort/\bk{}input} \\
+\texttt{terasort}     & Ordena por clave              & \texttt{input}  & \texttt{/\bk{}tarea/\bk{}terasort/\bk{}output} \\
+\texttt{teravalidate} & Verifica el orden             & \texttt{output} & \texttt{/\bk{}tarea/\bk{}terasort/\bk{}validate} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Dataset de entrada y justificación.} A diferencia de los dos anteriores, aquí \textbf{no se eligió el dataset: viene impuesto por el programa}. \texttt{teragen} es el generador oficial diseñado específicamente para alimentar a \texttt{terasort}; no existe la alternativa de aportar un archivo real porque \texttt{terasort} espera un formato binario propio, con registros de exactamente 100 bytes de los cuales los primeros 10 son la clave aleatoria y el resto relleno estructurado. Se eligieron \textbf{1,000,000 de registros ($\approx$100 MB)} como volumen: suficiente para que el clúster reparta el trabajo en 21 mappers y 7 \textit{reducers}, demostrando paralelismo real, y manejable en tiempo de ejecución. De los tres programas, este es el que mejor representa un escenario de Big Data.
+
+\bloque{Comando ejecutado.}
+\begin{lstlisting}[style=sh]
+JAR=/usr/lib/hadoop-mapreduce/hadoop-mapreduce-examples.jar
+
+hdfs dfs -rm -r -f -skipTrash /tarea/terasort
+hdfs dfs -mkdir -p /tarea/terasort
+
+# FASE 1 - generacion de los datos (job SOLO DE MAP)
+time hadoop jar ${JAR} teragen 1000000 /tarea/terasort/input
+
+# FASE 2 - ordenamiento (NO se fuerza un unico reducer: ver analisis)
+time hadoop jar ${JAR} terasort /tarea/terasort/input /tarea/terasort/output
+
+# FASE 3 - validacion del orden
+time hadoop jar ${JAR} teravalidate /tarea/terasort/output /tarea/terasort/validate
+\end{lstlisting}
+
+\subsubsection{Fase 1: \texttt{teragen}}
+
+\begin{table}[H]
+\centering
+\caption{Contadores de \texttt{teragen}}
+\label{tab:teragen}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Registros generados      & 1,000,000 \\
+Bytes escritos           & 100,000,000 (95.4 MiB) \\
+Archivos de salida       & 21 $\times$ \texttt{part-m-*} ($\sim$4.7 MB c/u) \\
+Mappers / Reducers       & 21 / \textbf{0} \\
+Tiempo real              & 1m 12.590s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El dato más llamativo es \texttt{Total time spent by all reduces (ms)=\bk{}0}: \textbf{\texttt{teragen} es un job exclusivamente de Map}, sin fase \textit{reduce}. Cada mapper genera su porción de datos y la escribe directamente en HDFS, lo que explica el prefijo \texttt{part-m-} (map) en lugar de \texttt{part-r-} (reduce) en los nombres de archivo. La discrepancia entre los \guillemotleft{}100 MB\guillemotright{} y los 95.4 M que reporta \texttt{hdfs dfs -du -h} no es un error: 100,000,000 bytes en base 10 equivalen a 95.4 MiB en base 2.
+
+\captura{hadoop/03_terasort/02_teragen_counters_y_archivos.png}{Contadores de \texttt{teragen} (21 mappers, 0 reducers) y los 21 archivos \texttt{part-m-*} generados en HDFS.}
+
+\subsubsection{Fase 2: \texttt{terasort}}
+
+\begin{table}[H]
+\centering
+\caption{Contadores de \texttt{terasort}}
+\label{tab:terasort}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Registros de entrada     & 1,000,000 \\
+Registros de salida      & 1,000,000 \\
+Mappers / Reducers       & 21 / \textbf{7} \\
+Bytes leídos / escritos  & 100,000,000 / 100,000,000 \\
+Tiempo real              & 1m 37.541s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Antes de lanzar el job propiamente dicho, la consola muestra una fase preparatoria reveladora:
+
+\begin{lstlisting}[style=sh]
+Sampling 10 splits of 21
+Making 7 from 100000 sampled records
+Computing parititions took 727ms
+\end{lstlisting}
+
+Ese es el \textbf{\texttt{TotalOrderPartitioner}} en acción, y es la razón por la que en este programa \textbf{no se forzó un único \textit{reducer}}, a diferencia de los dos anteriores. El particionador muestrea 100,000 claves para determinar los rangos de reparto: el \textit{reducer} 0 recibirá las claves más bajas, el 1 las siguientes, y así sucesivamente. El resultado es que cada archivo \texttt{part-r-*} está ordenado internamente \textbf{y además} todo \texttt{part-r-00000} $<$ \texttt{part-r-00001} $< \dots$; es decir, se obtiene un \textbf{orden global} aunque la salida esté repartida en siete archivos. El archivo \texttt{\_partition.lst} que aparece en la carpeta de salida es precisamente la tabla de rangos calculada en esa fase de muestreo.
+
+Que \texttt{Map input records} y \texttt{Reduce output records} sean ambos exactamente 1,000,000 confirma que no se perdió ni se duplicó ningún registro durante el \textit{shuffle}.
+
+\captura{hadoop/03_terasort/03_terasort_muestreo_particiones.png}{Fase de muestreo del \texttt{TotalOrderPartitioner} previa al ordenamiento.}
+
+\subsubsection{Fase 3: \texttt{teravalidate}}
+
+\bloque{Exploración de los resultados en HDFS.}
+\begin{lstlisting}[style=sh]
+$ hdfs dfs -cat /tarea/terasort/validate/part-r-00000
+checksum    7a27e2d0d55de
+
+$ hdfs dfs -ls /tarea/terasort/output
+Found 9 items
+  ...  0      /tarea/terasort/output/_SUCCESS
+  ...  66     /tarea/terasort/output/_partition.lst
+  ...  14363800  /tarea/terasort/output/part-r-00000
+  ...  (7 archivos part-r-* en total)
+
+$ hdfs dfs -du -s -h /tarea/terasort/output
+95.4 M  95.4 M  /tarea/terasort/output
+\end{lstlisting}
+
+\textbf{Una única línea con el checksum y ninguna línea de error.} Ese es el criterio de éxito: si algún registro estuviera fuera de secuencia, \texttt{teravalidate} habría escrito una línea adicional por cada violación del orden (\textit{misorder}). La validación cubre tanto el orden interno de cada archivo como los límites entre archivos consecutivos.
+
+\captura{hadoop/03_terasort/06_teravalidate_checksum.png}{Validación del ordenamiento: una sola línea de \textit{checksum} y ninguna violación de orden.}
+
+\paragraph{Inspección de los registros.} Los datos no son texto legible, por lo que se examinaron en hexadecimal con \texttt{xxd}. Comparando las claves, que son los primeros 10 bytes de cada registro, en posiciones sucesivas del archivo ordenado se observa la progresión ascendente, que es la confirmación visual del ordenamiento. El resto de cada registro corresponde al relleno estructurado que genera \texttt{teragen}, con los patrones repetitivos de dígitos y las secuencias \texttt{AAAA BBBB CCCC} visibles en el volcado.
+
+\captura{hadoop/03_terasort/07_registros_hexadecimal.png}{Volcado hexadecimal de los primeros registros ordenados: las claves progresan de forma ascendente.}
+
+\paragraph{Nota sobre la replicación.} La columna de replicación de los archivos de salida muestra \texttt{1} en lugar de \texttt{2}. No es un fallo del clúster: \texttt{terasort} escribe su salida con factor de replicación 1 por defecto, para no penalizar la medición de rendimiento con el coste de replicar los datos.
+
+% =====================================================================
+\subsection{Síntesis de la Ejecución MapReduce}
+
+\paragraph{Sobre el uso de HDFS.} En los tres programas, tanto la entrada como la salida residieron en HDFS. Los datasets externos (Quijote, MovieLens) se descargaron primero al disco local del nodo maestro y desde allí se cargaron con \texttt{hdfs dfs -put}; el de \texttt{terasort} se generó directamente en HDFS. Un punto importante de arquitectura: HDFS vive en los discos de las VMs del clúster, así que \textbf{al eliminar el clúster los datos de \texttt{/tarea} se pierden}. Para conservarlos habría que copiarlos previamente al \textit{bucket} de Cloud Storage con \texttt{hadoop distcp}, que es persistente e independiente del ciclo de vida del clúster. Esta es exactamente la misma razón por la que el dataset principal del proyecto se alojó en GCS y no en HDFS (Sección~\ref{sec:hadoop} frente a la justificación de la Sección~3.2).
+
+\paragraph{Sobre el paralelismo y el tamaño de los datos.} El contraste entre los tres programas es ilustrativo:
+
+\begin{table}[H]
+\centering
+\caption{Paralelismo obtenido según el volumen de entrada}
+\label{tab:hadoop-paralelismo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Programa} & \textbf{Volumen} & \textbf{Input splits} & \textbf{Mappers} \\
+\midrule
+\texttt{secondarysort} & 779 KB & 1  & 1 \\
+\texttt{wordmean}      & 2.1 MB & 1  & 1 \\
+\texttt{terasort}      & 100 MB & 21 & 21 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El tamaño de bloque por defecto de HDFS (128 MB) determina cuántos \textit{input splits} se generan y, por tanto, cuánto paralelismo es posible. Un clúster de tres nodos no acelera un archivo de 2 MB; el beneficio aparece cuando el volumen justifica la distribución. Esta conclusión es la misma que arrojó el análisis de Spark en la Sección~\ref{subsec:diagnostico-spark}, obtenida aquí por una vía completamente independiente.
+
+\paragraph{Sobre el número de \textit{reducers}.} El hallazgo más valioso de la práctica fue descubrir que la configuración de \textit{reducers} no es un detalle irrelevante, y que su efecto correcto \textbf{depende de cómo esté escrito cada programa}:
+
+\begin{table}[H]
+\centering
+\caption{Efecto de usar varios \textit{reducers} en cada programa}
+\label{tab:hadoop-reducers}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}llp{6.6cm}@{}}
+\toprule
+\textbf{Programa} & \textbf{Varios reducers} & \textbf{Motivo} \\
+\midrule
+\texttt{wordmean}      & \textbf{Rompe el resultado} (\texttt{Infinity}) & El código lee solo \texttt{part-r-00000}; las dos claves quedan separadas \\
+\texttt{secondarysort} & Solo fragmenta la salida & Cada grupo cae entero en un \textit{reducer}: correcto pero incómodo de revisar \\
+\texttt{terasort}      & \textbf{Es la idea central} & El \texttt{TotalOrderPartitioner} mantiene el orden global entre archivos \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Sobre la depuración en entornos distribuidos.} Los dos fallos de \texttt{wordmean} (\texttt{NaN} e \texttt{Infinity}) enseñaron que en MapReduce un job puede terminar con \texttt{completed successfully} y aun así producir un resultado inválido. Los \textbf{contadores del job} (\texttt{Map input records}, \texttt{Bytes Read}, \texttt{Launched reduce tasks}) resultaron ser la herramienta de diagnóstico decisiva: fueron ellos, y no los mensajes de error, los que permitieron distinguir entre \guillemotleft{}el archivo de entrada estaba vacío\guillemotright{} y \guillemotleft{}la salida se repartió entre varios archivos\guillemotright{}. Es el mismo principio que guió el diagnóstico de Spark de la Sección~\ref{subsec:diagnostico-spark}: ante un comportamiento inesperado, la instrumentación del motor dice lo que los mensajes de estado callan.
+
+\paragraph{Fuentes de los datasets.}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Don Quijote de la Mancha.} Project Gutenberg, eBook \#2000, texto plano UTF-8. Dominio público. \url{https://www.gutenberg.org/ebooks/2000}
+    \item \textbf{MovieLens 100K.} GroupLens Research, University of Minnesota. 100,000 calificaciones de 943 usuarios sobre 1,682 películas. Uso académico permitido. \url{https://files.grouplens.org/datasets/movielens/ml-100k.zip}
+    \item \textbf{TeraSort.} Datos sintéticos generados por \texttt{teragen}, incluido en \texttt{hadoop-\bk{}mapreduce-\bk{}examples.\bk{}jar}.
+\end{itemize}
+
+Los cinco \textit{scripts} completos de esta práctica (creación del clúster, los tres programas y su eliminación) se entregan en el paquete de código fuente.
