@@ -17,7 +17,7 @@ Este último punto es relevante para la validez de la comparativa: sin una acci�
 
 \subsection{Configuración de Cada Motor}
 
-Las cuatro herramientas se inicializaron de forma distinta, y esas diferencias son determinantes para interpretar los resultados de rendimiento. La Tabla~\ref{tab:motores} las resume; el código de inicialización se entrega en el paquete de código fuente.
+Las cuatro herramientas se inicializaron de forma distinta, y esas diferencias son determinantes para interpretar los resultados de rendimiento. La Tabla~\ref{tab:motores} las resume; el código de inicialización de cada motor puede consultarse en su \textit{notebook} del repositorio (Tabla~\ref{tab:repo}).
 
 \begin{table}[H]
 \centering
@@ -110,11 +110,11 @@ Consulta 10 (Ranking)        &   0.031 &   1.12 &  12.04 &  32.84 \\
 
 \paragraph{Evidencia de ejecución de las cuatro herramientas.} Las capturas siguientes muestran la misma operación, la eliminación de duplicados de la Consulta~2, resuelta por cada motor sobre el clúster. Los tres resultados coinciden en 315,809 registros y 184,191 duplicados eliminados; lo que cambia es el tiempo y, sobre todo, el modo de ejecución.
 
-\captura{consultas/2w/modin/02.png}{Modin sobre Ray: misma operación resuelta en 8.82\,s, con el motor operando sobre el nodo Master.}
+\captura{consultas/2w/modin/02.png}{Modin sobre Ray: misma operación resuelta en 8.82\,s, con el motor operando sobre el nodo Master. Notebook: \nbref{modin}{2}.}
 
-\captura{consultas/2w/dask/05.png}{Dask: ejecución diferida con particiones sobre un \texttt{LocalCluster}, restringido al nodo Master.}
+\captura{consultas/2w/dask/05.png}{Dask: ejecución diferida con particiones sobre un \texttt{LocalCluster}, restringido al nodo Master. Notebook: \nbref{dask}{2}.}
 
-\captura{consultas/2w/spark/02.png}{Apache Spark sobre YARN: la barra de progreso \texttt{[Stage 14: ...]} evidencia la ejecución distribuida real en los nodos \textit{worker} del clúster.}
+\captura{consultas/2w/spark/02.png}{Apache Spark sobre YARN: la barra de progreso \texttt{[Stage 14: ...]} evidencia la ejecución distribuida real en los nodos \textit{worker} del clúster. Notebook: \nbref{spark}{2}.}
 
 El orden de magnitud entre herramientas es la observación dominante: completar las diez consultas toma \textbf{0.567\,s} con Polars, \textbf{21.45\,s} con Modin, \textbf{203.18\,s} con Dask y \textbf{376.97\,s} con Apache Spark. Es decir, Spark resulta \textbf{665 veces más lento} que Polars, y Dask \textbf{358 veces} más lento, pese a ejecutar exactamente la misma lógica sobre los mismos datos y producir resultados idénticos.
 
@@ -158,6 +158,9 @@ Consulta 10 (Ranking)        &   0.041 &   1.08 &  12.58 &  30.43 \\
 \textbf{Total acumulado}      & \textbf{0.557} & \textbf{22.90} & \textbf{208.49} & \textbf{368.82} \\
 \bottomrule
 \end{tabular}
+\vspace{0.15cm}
+
+{\footnotesize Fuente: los cuatro \textit{notebooks} \texttt{*\_\bk{}4\_\bk{}workers.\bk{}ipynb} de \nbdir{} en el repositorio.}
 \end{table}
 
 Los resultados arrojaron tiempos prácticamente idénticos a los de la Arquitectura A en los cuatro frameworks evaluados, como resume la Tabla~\ref{tab:comparativa}.

@@ -22,3 +22,43 @@ Un aporte diferencial de este informe es que no se limita a reportar resultados 
     \item \textbf{El 36.8\,\% de las filas del archivo de trabajo resultaron ser copias exactas de otras filas.} La fase de limpieza del flujo distribuido lo detectó; el análisis posterior identificó su origen en el parámetro de muestreo empleado y lo verificó con un modelo probabilístico (Sección~\ref{subsec:muestreo}).
     \item \textbf{Dos ejecuciones de MapReduce terminaron con estado \texttt{completed successfully} produciendo resultados inválidos} (\texttt{NaN} e \texttt{Infinity}). El diagnóstico mediante los contadores del \textit{job} reveló, en un caso, un archivo de entrada vacío y, en el otro, una limitación del propio programa de ejemplo frente a múltiples \textit{reducers} (Sección~\ref{subsubsec:wordmean-fallos}).
 \end{itemize}
+
+
+\subsection*{Disponibilidad del Código y de las Evidencias}
+\addcontentsline{toc}{subsection}{Disponibilidad del Código y de las Evidencias}
+
+Todo el código de este proyecto, junto con los \textit{notebooks} tal como quedaron tras su ejecución sobre el clúster (con sus salidas y tiempos cronometrados), está publicado en el siguiente repositorio:
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{\centering\vspace{0.15cm}
+\textbf{\url{https://github.com/tmrainer/BigDataP1}}\\[0.15cm]
+\footnotesize \texttt{notebooks/} \quad los 8 \textit{notebooks} ejecutados \qquad
+\texttt{informe/} \quad código fuente \LaTeX{} de este documento
+\vspace{0.15cm}}}
+\end{center}
+
+A lo largo del informe, cada vez que se cita la ejecución de una herramienta sobre una arquitectura concreta se indica el archivo correspondiente del repositorio. La Tabla~\ref{tab:repo} resume esa correspondencia; los nombres de archivo son enlaces directos.
+
+\begin{table}[H]
+\centering
+\caption{Correspondencia entre cada ejecución y su \textit{notebook} en el repositorio}
+\label{tab:repo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}llp{6.9cm}@{}}
+\toprule
+\textbf{Herramienta} & \textbf{Arquitectura} & \textbf{Archivo en el repositorio} \\
+\midrule
+Polars        & A (2 workers) & \nbref{polars}{2} \\
+Polars        & B (4 workers) & \nbref{polars}{4} \\
+Dask          & A (2 workers) & \nbref{dask}{2} \\
+Dask          & B (4 workers) & \nbref{dask}{4} \\
+Modin         & A (2 workers) & \nbref{modin}{2} \\
+Modin         & B (4 workers) & \nbref{modin}{4} \\
+Apache Spark  & A (2 workers) & \nbref{spark}{2} \\
+Apache Spark  & B (4 workers) & \nbref{spark}{4} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los \textit{scripts} de la práctica de Hadoop MapReduce, los CSV de tiempos exportados a Cloud Storage y el juego completo de capturas de ejecución se entregan en el paquete de código fuente que acompaña a este informe.

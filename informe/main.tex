@@ -109,6 +109,24 @@
 % figura, a diferencia de los comandos del paquete url.
 \newcommand{\bk}{\discretionary{}{}{}}
 
+% ---------- Repositorio de codigo ----------
+\newcommand{\repourl}{https://github.com/tmrainer/BigDataP1}
+
+% \nbref{herramienta}{n}: enlaza el notebook de esa herramienta y arquitectura.
+% OJO: la URL debe ir SIN \bk, o los puntos de corte acaban dentro del enlace.
+% Por eso el destino y el texto mostrado se construyen por separado.
+\newcommand{\nbref}[2]{%
+  \href{\repourl/blob/main/notebooks/#1_#2_workers.ipynb}%
+       {\texttt{notebooks/#1\_\bk{}#2\_\bk{}workers.\bk{}ipynb}}}
+
+% Enlace a la carpeta de notebooks
+\newcommand{\nbdir}{\href{\repourl/tree/main/notebooks}{\texttt{notebooks/}}}
+
+% Linea de referencia al notebook ejecutado, bajo una consulta
+\newcommand{\refnotebook}[2]{%
+  \par\smallskip\noindent\footnotesize
+  \textbf{Notebook ejecutado:} \nbref{#1}{#2}\par\normalsize}
+
 % ---------- Atajos ----------
 % Encabezado de bloque seguro delante de un lstlisting (un \paragraph se solapa)
 \newcommand{\bloque}[1]{\par\medskip\noindent\textbf{#1}\par\nopagebreak\vspace{0.3em}}

@@ -6,7 +6,9 @@ Esta sección documenta las diez operaciones implementadas sobre el dataset, con
 
 La verificación arrojó coincidencia exacta en las Consultas 1 a 5 y en la 10, y \textbf{una única divergencia sistemática} en las Consultas 6 a 9, documentada en la Sección~\ref{subsec:divergencia}. No se trata de un error de implementación, sino de una diferencia de semántica entre las API que resulta instructiva por sí misma.
 
-Cada consulta se acompaña de la captura de su ejecución en el entorno de JupyterLab del clúster. Las capturas corresponden a la implementación en Polars por ser la de salida más legible; la Sección~\ref{sec:rendimiento} incluye las evidencias equivalentes de Dask, Modin y Apache Spark. El código fuente completo de las cuatro herramientas se entrega por separado, fuera de este informe.
+Cada consulta se acompaña de la captura de su ejecución en el entorno de JupyterLab del clúster. Las capturas corresponden a la implementación en Polars sobre la Arquitectura A, por ser la de salida más legible; la Sección~\ref{sec:rendimiento} incluye las evidencias equivalentes de Dask, Modin y Apache Spark.
+
+Bajo cada consulta se indica el \textit{notebook} del repositorio donde puede consultarse su código y su salida completa. Las implementaciones equivalentes en las otras tres herramientas están en los archivos que lista la Tabla~\ref{tab:repo}.
 
 \begin{table}[H]
 \centering
@@ -49,6 +51,8 @@ El conteo de nulos reveló dos hallazgos relevantes: \texttt{game} presenta \tex
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.010\,s \textbar{} Modin 0.805\,s \textbar{} Dask 15.47\,s \textbar{} Spark 24.14\,s.
 
+\refnotebook{polars}{2}
+
 
 \subsection{Consulta 2: Eliminación de duplicados}
 
@@ -68,6 +72,8 @@ Se eliminaron \textbf{184,191} registros duplicados (36.8\,\% del total), pasand
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.321\,s \textbar{} Modin 8.82\,s \textbar{} Dask 19.33\,s \textbar{} Spark 27.44\,s.
 
+\refnotebook{polars}{2}
+
 
 \subsection{Consulta 3: Tratamiento de valores nulos}
 
@@ -84,6 +90,8 @@ En consecuencia, la eliminación de registros sin reseña descartó \textbf{0} f
 
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.004\,s \textbar{} Modin 2.17\,s \textbar{} Dask 49.19\,s \textbar{} Spark 81.98\,s.
+
+\refnotebook{polars}{2}
 
 
 \subsection{Consulta 4: Transformación de variables}
@@ -102,6 +110,8 @@ Esta nueva característica habilita la Consulta~9 y, en términos de negocio, fu
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.050\,s \textbar{} Modin 0.556\,s \textbar{} Dask 23.79\,s \textbar{} Spark 32.52\,s.
 
+\refnotebook{polars}{2}
+
 
 \subsection{Consulta 5: Filtrado de reseñas recomendadas}
 
@@ -118,6 +128,8 @@ Este es el primer indicador de valor del proyecto: en la muestra analizada, cinc
 
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.008\,s \textbar{} Modin 1.84\,s \textbar{} Dask 35.38\,s \textbar{} Spark 46.28\,s.
+
+\refnotebook{polars}{2}
 
 
 \subsection{Consulta 6: Cantidad de reseñas por videojuego}
@@ -136,6 +148,8 @@ El resultado valida la representatividad interna de la muestra: los títulos má
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.046\,s \textbar{} Modin 0.991\,s \textbar{} Dask 11.72\,s \textbar{} Spark 34.42\,s.
 
+\refnotebook{polars}{2}
+
 
 \subsection{Consulta 7: Porcentaje de recomendación por videojuego}
 
@@ -152,6 +166,8 @@ Este hallazgo es metodológicamente valioso: un porcentaje calculado sobre una s
 
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.030\,s \textbar{} Modin 1.25\,s \textbar{} Dask 12.34\,s \textbar{} Spark 32.73\,s.
+
+\refnotebook{polars}{2}
 
 
 \subsection{Consulta 8: Promedio de horas jugadas por videojuego}
@@ -170,6 +186,8 @@ La interpretación correcta de estas cifras no es «son los juegos más adictivo
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.033\,s \textbar{} Modin 3.21\,s \textbar{} Dask 11.79\,s \textbar{} Spark 32.32\,s.
 
+\refnotebook{polars}{2}
+
 
 \subsection{Consulta 9: Longitud promedio de reseñas por videojuego}
 
@@ -186,6 +204,8 @@ Este patrón no es casual: refleja el \textbf{límite de 8,000 caracteres} que i
 
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.034\,s \textbar{} Modin 0.702\,s \textbar{} Dask 12.14\,s \textbar{} Spark 32.31\,s.
+
+\refnotebook{polars}{2}
 
 
 \subsection{Consulta 10: Ranking final de videojuegos}
@@ -205,6 +225,8 @@ Resulta además significativo que el corte de 100 reseñas descarte al 97.4\,\% 
 
 \paragraph{Tiempos de ejecución (Arquitectura A).}
 Polars 0.031\,s \textbar{} Modin 1.12\,s \textbar{} Dask 12.04\,s \textbar{} Spark 32.84\,s.
+
+\refnotebook{polars}{2}
 
 
 \subsection{Divergencia entre Herramientas: el Tratamiento de Claves Nulas}
